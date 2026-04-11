@@ -1,0 +1,25 @@
+# Python
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+dist/
+
+# Environment
+.env
+.env.local
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
