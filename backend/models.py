@@ -10,8 +10,8 @@ except ImportError:
 
 # Registry of available models with display info
 DEMUCS_MODELS = {
-    "htdemucs":     "Demucs Hybrid Transformer",
-    "htdemucs_ft":  "Demucs Fine-Tuned (recommended)",
+    "htdemucs":     "Demucs Hybrid Transformer (recommended)",
+    "htdemucs_ft":  "Demucs Fine-Tuned (slow, high VRAM)",
     "mdx_extra":    "MDX-Net Extra",
     "mdx_extra_q":  "MDX-Net Extra (quantized, faster)",
 }

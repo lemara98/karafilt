@@ -148,6 +148,78 @@ h1 {
   flex-shrink: 0;
 }
 
+/* ── Countdown overlay ── */
+.countdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(11, 14, 26, 0.92);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  animation: countdown-fade-in 0.18s ease-out;
+}
+
+.countdown-hint {
+  font-size: 11px;
+  color: #8b90b0;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.countdown-number {
+  font-size: 96px;
+  font-weight: 800;
+  line-height: 1;
+  background: linear-gradient(135deg, #60a5fa, #c084fc, #ff6b9d);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 0 40px rgba(192, 132, 252, 0.4);
+  animation: countdown-pulse 1s ease-out;
+}
+
+.countdown-number.go {
+  font-size: 64px;
+  letter-spacing: 1px;
+}
+
+.countdown-cancel {
+  padding: 7px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #a0a4c0;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.countdown-cancel:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e0e4f0;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes countdown-pulse {
+  0%   { transform: scale(0.6); opacity: 0; }
+  35%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes countdown-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ── Sections ── */
 .section {
   display: flex;
@@ -268,6 +340,82 @@ input[type="range"]::-webkit-slider-thumb:hover {
   line-height: 1.3;
 }
 
+/* ── Secondary button ── */
+.btn-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 4px;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.08);
+  color: #c084fc;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.btn-secondary:hover {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #d8b4fe;
+}
+
+.btn-secondary svg {
+  flex-shrink: 0;
+}
+
+/* ── Toggle switch ── */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 20px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #6b7294;
+  transition: transform 0.25s ease, background 0.25s;
+}
+
+.switch input:checked + .switch-slider {
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.35), rgba(192, 132, 252, 0.35));
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+.switch input:checked + .switch-slider::before {
+  transform: translateX(16px);
+  background: linear-gradient(135deg, #60a5fa, #c084fc);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.5);
+}
+
 /* ── AI panel ── */
 .ai-panel {
   border-color: rgba(139, 92, 246, 0.15);
@@ -283,6 +431,142 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: white;
   text-transform: uppercase;
   letter-spacing: 0.8px;
+}
+
+/* ── AI status indicator ── */
+.ai-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.ai-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #4b5073;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.ai-status-text {
+  font-size: 10px;
+  color: #8b90b0;
+  letter-spacing: 0.3px;
+}
+
+.ai-status.connecting .ai-status-dot,
+.ai-status.recording .ai-status-dot {
+  background: #facc15;
+  box-shadow: 0 0 6px rgba(250, 204, 21, 0.4);
+}
+
+.ai-status.processing .ai-status-dot,
+.ai-status.buffering .ai-status-dot {
+  background: #f97316;
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.4);
+  animation: ai-dot-pulse 1s ease-in-out infinite;
+}
+
+.ai-status.ai_active .ai-status-dot {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+.ai-status.ai_active {
+  border-color: rgba(74, 222, 128, 0.15);
+  background: rgba(74, 222, 128, 0.04);
+}
+
+.ai-status.stft_preview .ai-status-dot {
+  background: #60a5fa;
+  box-shadow: 0 0 6px rgba(96, 165, 250, 0.4);
+}
+
+.ai-status.fallback .ai-status-dot,
+.ai-status.error .ai-status-dot {
+  background: #f87171;
+  box-shadow: 0 0 6px rgba(248, 113, 113, 0.4);
+}
+
+@keyframes ai-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Settings toggle ── */
+.settings-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: #4b5073;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: color 0.2s, background 0.2s;
+}
+
+.settings-btn:hover {
+  color: #8b90b0;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-btn.open {
+  color: #8b5cf6;
+}
+
+.settings-btn svg {
+  transition: transform 0.3s;
+}
+
+.settings-btn.open svg {
+  transform: rotate(90deg);
+}
+
+/* ── Settings panel ── */
+.settings-panel {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Text input ── */
+.text-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d0d4e8;
+  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  transition: border-color 0.2s, background 0.2s;
+  outline: none;
+}
+
+.text-input:hover {
+  border-color: rgba(139, 92, 246, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.text-input:focus {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.15);
+}
+
+.text-input::placeholder {
+  color: #3a3e5a;
 }
 
 /* ── Footer ── */

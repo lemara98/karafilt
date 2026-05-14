@@ -22,21 +22,55 @@ if HAS_AUDIO_SEPARATOR:
 class DemucsBackend:
     """Handles separation using Demucs models."""
 
+    # Internal processing segment (seconds). Default htdemucs uses ~7.8s, which
+    # peaks near 2 GB on GPU. 3s keeps peak memory ~1 GB — fits comfortably in 2 GB cards.
+    SEGMENT_SECONDS = 3.0
+
     def __init__(self, device):
         self.device = torch.device(device)
         self.models = {}  # lazy cache: model_name -> loaded model
 
     def _get_model(self, model_name):
         if model_name not in self.models:
-            print(f"Loading Demucs model '{model_name}'...")
+            print(f"Loading Demucs model '{model_name}' on {self.device}...")
             model = get_model(model_name)
-            model.to(self.device)
+            try:
+                model.to(self.device)
+            except torch.cuda.OutOfMemoryError:
+                # OOM while moving the model onto the GPU — degrade to CPU
+                # instead of crashing, mirroring the inference-path fallback.
+                torch.cuda.empty_cache()
+                self._fall_back_to_cpu()
+                model.to(self.device)
             model.eval()
             self.models[model_name] = model
             print(f"  Loaded. Sample rate: {model.samplerate} Hz, sources: {model.sources}")
         return self.models[model_name]
 
-    def process(self, pcm_float32, input_sr, model_name="htdemucs_ft", two_pass=False):
+    def _fall_back_to_cpu(self):
+        """Move all loaded models to CPU after a GPU OOM. Persists for the session."""
+        print("  ⚠ GPU out of memory — falling back to CPU for remaining requests.")
+        self.device = torch.device("cpu")
+        for model in self.models.values():
+            model.to(self.device)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _apply(self, model, audio):
+        """Run apply_model with smaller segments and automatic CPU fallback on OOM."""
+        kwargs = dict(progress=False, overlap=0.25, shifts=1,
+                      split=True, segment=self.SEGMENT_SECONDS)
+        try:
+            with torch.no_grad():
+                return apply_model(model, audio, **kwargs)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            self._fall_back_to_cpu()
+            audio = audio.to(self.device)
+            with torch.no_grad():
+                return apply_model(model, audio, **kwargs)
+
+    def process(self, pcm_float32, input_sr, model_name="htdemucs", two_pass=False):
         model = self._get_model(model_name)
         sr = model.samplerate
 
@@ -46,8 +80,7 @@ class DemucsBackend:
 
         audio = audio.unsqueeze(0).to(self.device)
 
-        with torch.no_grad():
-            sources = apply_model(model, audio, progress=False, overlap=0.25, shifts=1)
+        sources = self._apply(model, audio)
 
         source_names = model.sources
         vocals_idx = source_names.index("vocals")
@@ -58,9 +91,7 @@ class DemucsBackend:
             if i != vocals_idx:
                 if i == other_idx and two_pass:
                     other_stem = sources[0, other_idx].unsqueeze(0)
-                    with torch.no_grad():
-                        other_sources = apply_model(model, other_stem, progress=False,
-                                                    overlap=0.25, shifts=1)
+                    other_sources = self._apply(model, other_stem)
                     for j in range(len(source_names)):
                         if j != vocals_idx:
                             accompaniment += other_sources[0, j]
@@ -69,6 +100,11 @@ class DemucsBackend:
                     accompaniment += sources[0, i]
 
         accompaniment = accompaniment.cpu()
+
+        # Release GPU memory between chunks to prevent fragmentation buildup
+        if self.device.type == "cuda":
+            del sources
+            torch.cuda.empty_cache()
 
         # Loudness matching: scale accompaniment so its RMS matches the original mix
         original_rms = audio.squeeze(0).cpu().float().pow(2).mean().sqrt().item()
@@ -180,5 +216,5 @@ class ModelManager:
         elif HAS_AUDIO_SEPARATOR and model_name in SEPARATOR_MODELS:
             return self.audio_sep.process(pcm_float32, input_sr, model_name, two_pass)
         else:
-            print(f"Unknown model '{model_name}', falling back to htdemucs_ft")
-            return self.demucs.process(pcm_float32, input_sr, "htdemucs_ft", two_pass)
+            print(f"Unknown model '{model_name}', falling back to htdemucs")
+            return self.demucs.process(pcm_float32, input_sr, "htdemucs", two_pass)

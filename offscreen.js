@@ -4,8 +4,33 @@ let sourceNode = null;
 let mediaStream = null;
 let ws = null;
 let currentMode = "stft";
-let currentAIModel = "htdemucs_ft";
+let currentAIModel = "htdemucs";
 let captureReady = false;
+let serverUrl = "ws://localhost:9876";
+let apiKey = "";
+let aiChunksSent = 0;
+
+// ── Smart-sync alignment state ──────────────────────────────────────────────
+// A separate WebSocket + capture tap that streams downsampled mono PCM to the
+// backend's aligner. Independent of the AI vocal-removal mode — runs whenever
+// the service worker requests alignment for the current song.
+let alignWs = null;
+let alignProcessor = null;
+let alignSink = null;
+let alignActive = false;
+let alignSongKey = null;
+let alignTabId = null;
+let alignAccumulator = [];
+let alignAccSamples = 0;
+const ALIGN_TARGET_SR = 16000;
+const ALIGN_SEND_INTERVAL_S = 5;
+
+function sendAIStatus(status, detail) {
+  chrome.runtime.sendMessage({ type: "AI_STATUS", status, detail });
+}
+
+// Server settings are pushed in from the service worker (offscreen
+// docs can't access chrome.storage directly — only chrome.runtime).
 
 // AI mode state
 const AI_CHUNK_SECONDS = 5;
@@ -30,6 +55,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "STREAM_READY":
       console.log("[OFFSCREEN] STREAM_READY received, mode:", message.mode, "aiModel:", message.aiModel);
       if (message.aiModel) currentAIModel = message.aiModel;
+      if (message.serverUrl) serverUrl = message.serverUrl;
+      if (typeof message.apiKey === "string") apiKey = message.apiKey;
       startCapture(message.streamId, message.mode || "stft");
       break;
     case "STOP_CAPTURE":
@@ -50,11 +77,238 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ws.send(JSON.stringify({ type: "set_model", value: currentAIModel }));
       }
       break;
+    case "SET_SERVER_URL":
+      serverUrl = message.value;
+      break;
+    case "SET_API_KEY":
+      apiKey = message.value;
+      break;
     case "GET_AI_MODELS":
+      if (message.serverUrl) serverUrl = message.serverUrl;
+      if (typeof message.apiKey === "string") apiKey = message.apiKey;
       fetchModelsFromServer().then(sendResponse);
       return true; // async response
+    case "START_ALIGNMENT":
+      if (message.serverUrl) serverUrl = message.serverUrl;
+      if (typeof message.apiKey === "string") apiKey = message.apiKey;
+      startAlignment(message.songKey, message.lyrics, message.tabId);
+      break;
+    case "FINALIZE_ALIGNMENT":
+      finalizeAlignment(message.songKey);
+      break;
+    case "CANCEL_ALIGNMENT":
+      cancelAlignment(message.songKey);
+      break;
   }
 });
+
+// ── Smart-sync alignment ────────────────────────────────────────────────────
+
+function startAlignment(songKey, lyrics, tabId) {
+  if (!audioContext || !sourceNode) {
+    console.log("[OFFSCREEN][align] no audio source — capture must be active to align");
+    chrome.runtime.sendMessage({
+      type: "ALIGN_RESULT",
+      songKey,
+      tabId,
+      ok: false,
+      error: "capture_inactive",
+    }).catch(() => {});
+    return;
+  }
+  if (alignActive) {
+    // A new alignment for a different song supersedes the previous one
+    if (alignSongKey === songKey) {
+      console.log("[OFFSCREEN][align] already aligning this song — ignoring");
+      return;
+    }
+    cancelAlignment(alignSongKey);
+  }
+
+  console.log(`[OFFSCREEN][align] starting alignment for songKey=${songKey}, tabId=${tabId}`);
+  alignActive = true;
+  alignSongKey = songKey;
+  alignTabId = tabId != null ? tabId : null;
+  alignAccumulator = [];
+  alignAccSamples = 0;
+
+  const inputSR = audioContext.sampleRate;
+  const ratio = inputSR / ALIGN_TARGET_SR;
+
+  // Mono downsample tap. ScriptProcessor is deprecated but matches the existing
+  // aiBufferNode pattern and is sufficient for non-realtime capture.
+  alignProcessor = audioContext.createScriptProcessor(4096, 2, 1);
+  alignProcessor.onaudioprocess = (e) => {
+    if (!alignActive) return;
+    const left = e.inputBuffer.getChannelData(0);
+    const right = e.inputBuffer.getChannelData(1);
+    const len = left.length;
+    const outLen = Math.max(1, Math.floor(len / ratio));
+    const out = new Float32Array(outLen);
+    // Cheap nearest-neighbor downsample with stereo→mono mix. Quality is fine
+    // for Whisper which expects 16kHz speech-grade input.
+    for (let i = 0; i < outLen; i++) {
+      const srcIdx = Math.min(len - 1, Math.floor(i * ratio));
+      out[i] = (left[srcIdx] + right[srcIdx]) * 0.5;
+    }
+    alignAccumulator.push(out);
+    alignAccSamples += outLen;
+    if (alignAccSamples >= ALIGN_TARGET_SR * ALIGN_SEND_INTERVAL_S) {
+      flushAlignChunk();
+    }
+  };
+
+  // ScriptProcessor must be connected to a destination to fire onaudioprocess.
+  alignSink = audioContext.createGain();
+  alignSink.gain.value = 0; // silent — we don't want to play this back
+  sourceNode.connect(alignProcessor);
+  alignProcessor.connect(alignSink);
+  alignSink.connect(audioContext.destination);
+
+  openAlignWebSocket(songKey, lyrics);
+}
+
+function openAlignWebSocket(songKey, lyrics) {
+  try {
+    alignWs = new WebSocket(serverUrl);
+  } catch (err) {
+    console.warn("[OFFSCREEN][align] failed to open WS:", err);
+    notifyAlignResult({ songKey, ok: false, error: "ws_open_failed" });
+    cleanupAlignment();
+    return;
+  }
+  alignWs.binaryType = "arraybuffer";
+
+  alignWs.onopen = () => {
+    if (apiKey) alignWs.send(JSON.stringify({ type: "auth", token: apiKey }));
+    alignWs.send(JSON.stringify({
+      type: "align_start",
+      song_key: songKey,
+      lyrics: lyrics || "",
+      sample_rate: ALIGN_TARGET_SR,
+    }));
+    console.log("[OFFSCREEN][align] WS open, align_start sent");
+  };
+
+  alignWs.onmessage = (e) => {
+    if (typeof e.data !== "string") return;
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (msg.type === "align_result") {
+      console.log("[OFFSCREEN][align] received align_result:", msg.ok ? "ok" : msg.error);
+      notifyAlignResult({
+        songKey: msg.song_key || songKey,
+        ok: !!msg.ok,
+        lines: msg.lines || null,
+        error: msg.error || null,
+      });
+      cleanupAlignment();
+    }
+  };
+
+  alignWs.onerror = (err) => {
+    console.warn("[OFFSCREEN][align] WS error:", err);
+  };
+
+  alignWs.onclose = (evt) => {
+    console.log("[OFFSCREEN][align] WS closed:", evt.code, evt.reason);
+    if (alignActive) {
+      // Lost the connection mid-alignment — surface as failure
+      notifyAlignResult({ songKey, ok: false, error: "ws_closed" });
+      cleanupAlignment();
+    }
+  };
+}
+
+function flushAlignChunk() {
+  if (!alignWs || alignWs.readyState !== WebSocket.OPEN) return;
+  const total = alignAccSamples;
+  if (total === 0) return;
+  const buf = new Float32Array(total);
+  let off = 0;
+  for (const c of alignAccumulator) {
+    buf.set(c, off);
+    off += c.length;
+  }
+  alignAccumulator = [];
+  alignAccSamples = 0;
+
+  const header = new ArrayBuffer(8);
+  const view = new DataView(header);
+  view.setUint32(0, ALIGN_TARGET_SR, true);
+  view.setUint32(4, total, true);
+  const packet = new Uint8Array(8 + buf.byteLength);
+  packet.set(new Uint8Array(header), 0);
+  packet.set(new Uint8Array(buf.buffer), 8);
+  alignWs.send(packet.buffer);
+}
+
+function finalizeAlignment(songKey) {
+  if (!alignActive) return;
+  if (songKey && songKey !== alignSongKey) return;
+  console.log("[OFFSCREEN][align] finalizing alignment for", alignSongKey);
+  flushAlignChunk();
+  if (alignWs && alignWs.readyState === WebSocket.OPEN) {
+    alignWs.send(JSON.stringify({ type: "align_finalize" }));
+    // Don't cleanup yet — wait for align_result (cleanupAlignment fires in onmessage)
+    // Tear down the audio tap immediately so we stop buffering.
+    teardownAlignProcessor();
+    alignActive = false;
+  } else {
+    notifyAlignResult({ songKey: alignSongKey, ok: false, error: "ws_unavailable" });
+    cleanupAlignment();
+  }
+}
+
+function cancelAlignment(songKey) {
+  if (!alignActive) return;
+  if (songKey && songKey !== alignSongKey) return;
+  console.log("[OFFSCREEN][align] cancelling alignment for", alignSongKey);
+  if (alignWs && alignWs.readyState === WebSocket.OPEN) {
+    try { alignWs.send(JSON.stringify({ type: "align_cancel" })); } catch {}
+  }
+  cleanupAlignment();
+}
+
+function teardownAlignProcessor() {
+  if (alignProcessor) {
+    try { alignProcessor.disconnect(); } catch {}
+    alignProcessor.onaudioprocess = null;
+    alignProcessor = null;
+  }
+  if (alignSink) {
+    try { alignSink.disconnect(); } catch {}
+    alignSink = null;
+  }
+}
+
+function cleanupAlignment() {
+  teardownAlignProcessor();
+  if (alignWs) {
+    try { alignWs.close(); } catch {}
+    alignWs = null;
+  }
+  alignActive = false;
+  alignSongKey = null;
+  alignTabId = null;
+  alignAccumulator = [];
+  alignAccSamples = 0;
+}
+
+function notifyAlignResult({ songKey, ok, lines, error }) {
+  chrome.runtime.sendMessage({
+    type: "ALIGN_RESULT",
+    songKey,
+    tabId: alignTabId,
+    ok,
+    lines: lines || null,
+    error: error || null,
+  }).catch(() => {});
+}
 
 async function startCapture(streamId, initialMode) {
   console.log(`[OFFSCREEN] startCapture called, mode=${initialMode}, streamId=${streamId}`);
@@ -158,6 +412,7 @@ function switchMode(mode) {
     // Worklet stays at full volume as preview until AI chunks arrive
     if (workletGainNode) workletGainNode.gain.value = 1.0;
     if (aiOutputGainNode) aiOutputGainNode.gain.value = 0.0;
+    sendAIStatus("connecting");
     openWebSocket();
     // Tell the server which AI mode to use
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -165,6 +420,7 @@ function switchMode(mode) {
     }
   } else if (wasAI && !isAIMode(mode)) {
     closeWebSocket();
+    sendAIStatus("idle");
     // Restore worklet to full volume
     if (workletGainNode) workletGainNode.gain.value = 1.0;
     if (aiOutputGainNode) aiOutputGainNode.gain.value = 0.0;
@@ -182,12 +438,17 @@ function openWebSocket() {
   aiPlaying = false;
   aiChunksReceived = 0;
 
-  console.log("Karaoke Filter: connecting to Demucs backend...");
-  ws = new WebSocket("ws://localhost:9876");
+  console.log(`Karaoke Filter: connecting to backend at ${serverUrl}...`);
+  ws = new WebSocket(serverUrl);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
     console.log(`Karaoke Filter: connected to backend (mode=${currentMode}, model=${currentAIModel}, captureReady=${captureReady})`);
+    sendAIStatus("recording");
+    // Authenticate if an API key is configured
+    if (apiKey) {
+      ws.send(JSON.stringify({ type: "auth", token: apiKey }));
+    }
     // Tell the server which model and mode to use
     ws.send(JSON.stringify({ type: "set_model", value: currentAIModel }));
     ws.send(JSON.stringify({ type: "set_two_pass", value: currentMode === "ai2" }));
@@ -236,11 +497,16 @@ function openWebSocket() {
     aiChunksReceived++;
     console.log(`Received ${numSamples} processed samples from Demucs (chunk #${aiChunksReceived})`);
 
+    if (aiChunksReceived < AI_PREBUFFER_CHUNKS) {
+      sendAIStatus("buffering", { received: aiChunksReceived, needed: AI_PREBUFFER_CHUNKS });
+    }
+
     // Wait for pre-buffer to fill before crossfading from STFT to AI
     if (aiChunksReceived === AI_PREBUFFER_CHUNKS && workletGainNode && workletGainNode.gain.value > 0.1) {
       const now = audioContext.currentTime;
       workletGainNode.gain.linearRampToValueAtTime(0.0, now + 0.5);
       aiOutputGainNode.gain.linearRampToValueAtTime(1.0, now + 0.5);
+      sendAIStatus("ai_active");
     }
 
     if (!aiPlaying && aiChunksReceived >= AI_PREBUFFER_CHUNKS) playNextAIChunk();
@@ -248,6 +514,7 @@ function openWebSocket() {
 
   ws.onerror = (err) => {
     console.error("Karaoke Filter: WebSocket error", err);
+    sendAIStatus("error");
   };
 
   ws.onclose = (event) => {
@@ -256,6 +523,7 @@ function openWebSocket() {
     if (isAIMode(currentMode) && workletGainNode) {
       workletGainNode.gain.value = 1.0;
       if (aiOutputGainNode) aiOutputGainNode.gain.value = 0.0;
+      sendAIStatus("fallback");
     }
   };
 }
@@ -274,6 +542,7 @@ function closeWebSocket() {
   aiPlaybackQueue = [];
   aiPlaying = false;
   aiChunksReceived = 0;
+  aiChunksSent = 0;
 }
 
 function onAIAudioProcess(e) {
@@ -329,7 +598,11 @@ function sendAIChunk() {
   packet.set(new Uint8Array(interleaved.buffer), 8);
 
   ws.send(packet.buffer);
+  aiChunksSent++;
   console.log(`Sent ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s) to Demucs`);
+  if (aiChunksReceived < AI_PREBUFFER_CHUNKS) {
+    sendAIStatus("processing", { sent: aiChunksSent, received: aiChunksReceived });
+  }
 
   // Keep the last overlap portion for the next chunk so the server
   // receives overlapping audio, enabling seamless boundary crossfades
@@ -353,6 +626,7 @@ function playNextAIChunk() {
       const now = audioContext.currentTime;
       workletGainNode.gain.linearRampToValueAtTime(1.0, now + 0.3);
       aiOutputGainNode.gain.linearRampToValueAtTime(0.0, now + 0.3);
+      sendAIStatus("stft_preview");
     }
     return;
   }
@@ -397,13 +671,16 @@ function fetchModelsFromServer() {
 
     let tmpWs;
     try {
-      tmpWs = new WebSocket("ws://localhost:9876");
+      tmpWs = new WebSocket(serverUrl);
     } catch (e) {
       done({ success: false, error: "Cannot connect to server" });
       return;
     }
 
     tmpWs.onopen = () => {
+      if (apiKey) {
+        tmpWs.send(JSON.stringify({ type: "auth", token: apiKey }));
+      }
       tmpWs.send(JSON.stringify({ type: "get_models" }));
     };
     tmpWs.onmessage = (event) => {
@@ -437,6 +714,13 @@ function stopCapture() {
   console.log("Karaoke Filter: stopCapture called");
   console.trace("stopCapture trace");
   closeWebSocket();
+  // Finalize any in-flight alignment before tearing down the AudioContext
+  if (alignActive) {
+    finalizeAlignment(alignSongKey);
+  } else {
+    cleanupAlignment();
+  }
   cleanupAudio();
+  sendAIStatus("idle");
   currentMode = "stft";
 }

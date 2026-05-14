@@ -29,7 +29,7 @@ from websocket_handler import handle_client
 logging.getLogger("websockets").setLevel(logging.ERROR)
 
 
-async def main(port, device):
+async def main(port, device, auth_token=None):
     manager = ModelManager(device=device)
 
     available = manager.get_available_models()
@@ -39,9 +39,14 @@ async def main(port, device):
     if not HAS_AUDIO_SEPARATOR:
         print("Note: install 'audio-separator' for BS-Roformer, Mel-Roformer, MDX23C models")
 
+    if auth_token:
+        print(f"Authentication enabled (token set via --auth-token)")
+    else:
+        print("Authentication disabled (no --auth-token provided)")
+
     print(f"\nStarting WebSocket server on ws://localhost:{port}")
     async with websockets.serve(
-        functools.partial(handle_client, manager=manager),
+        functools.partial(handle_client, manager=manager, auth_token=auth_token),
         "localhost", port,
         logger=logging.getLogger("websockets"),
         max_size=10 * 1024 * 1024,  # 10MB — audio chunks can be ~2MB for 5s stereo
@@ -54,9 +59,11 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=9876)
     parser.add_argument("--device", type=str, default="auto",
                         help="Device: cpu, cuda, or auto")
+    parser.add_argument("--auth-token", type=str, default=None,
+                        help="Require clients to authenticate with this token")
     args = parser.parse_args()
 
     if args.device == "auto":
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    asyncio.run(main(args.port, args.device))
+    asyncio.run(main(args.port, args.device, args.auth_token))
