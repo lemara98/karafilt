@@ -1,14 +1,14 @@
-# Karaoke Filter
+# Karafilt
 
 <p align="center">
-  <img src="icons/icon128.png" alt="Karaoke Filter" width="96">
+  <img src="icons/icon128.png" alt="Karafilt" width="96">
 </p>
 
 **Real-time vocal removal for any browser tab.** Turn any song playing in Chrome into a karaoke track — no downloads, no uploads, just click and sing.
 
 ## How It Works
 
-Karaoke Filter captures audio from your active browser tab and removes the vocals in real time. It works with YouTube, Spotify Web Player, SoundCloud, or any website that plays audio.
+Karafilt captures audio from your active browser tab and removes the vocals in real time. It works with YouTube, Spotify Web Player, SoundCloud, or any website that plays audio.
 
 ### Processing Modes
 
@@ -34,12 +34,12 @@ Karaoke Filter captures audio from your active browser tab and removes the vocal
 2. Open `chrome://extensions/` in Chrome
 3. Enable **Developer mode** (top-right toggle)
 4. Click **Load unpacked** and select this folder
-5. The Karaoke Filter icon appears in your toolbar
+5. The Karafilt icon appears in your toolbar
 
 ## Usage
 
 1. Play a song in any tab (YouTube, Spotify, etc.)
-2. Click the Karaoke Filter extension icon
+2. Click the Karafilt extension icon
 3. Choose a processing mode
 4. Adjust the **Vocal Removal** slider (0-100%)
 5. Click **Start Filtering**

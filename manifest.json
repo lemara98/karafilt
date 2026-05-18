@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Karaoke Filter",
+  "name": "Karafilt",
   "version": "0.1.0",
   "description": "Real-time vocal removal for karaoke — removes vocals from any tab audio",
   "permissions": ["tabCapture", "offscreen", "activeTab", "tabs", "storage", "sidePanel"],

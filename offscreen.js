@@ -443,7 +443,7 @@ function isAIMode(mode) {
 
 function switchMode(mode) {
   const wasAI = isAIMode(currentMode);
-  console.log(`Karaoke Filter: switchMode "${currentMode}" → "${mode}" (captureReady=${captureReady})`);
+  console.log(`Karafilt: switchMode "${currentMode}" → "${mode}" (captureReady=${captureReady})`);
   currentMode = mode;
 
   // Always keep the worklet running with STFT for audio output
@@ -487,12 +487,12 @@ function openWebSocket() {
   aiPlaying = false;
   aiChunksReceived = 0;
 
-  console.log(`Karaoke Filter: connecting to backend at ${serverUrl}...`);
+  console.log(`Karafilt: connecting to backend at ${serverUrl}...`);
   ws = new WebSocket(serverUrl);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
-    console.log(`Karaoke Filter: connected to backend (mode=${currentMode}, model=${currentAIModel}, captureReady=${captureReady})`);
+    console.log(`Karafilt: connected to backend (mode=${currentMode}, model=${currentAIModel}, captureReady=${captureReady})`);
     sendAIStatus("recording");
     // Authenticate if an API key is configured
     if (apiKey) {
@@ -562,12 +562,12 @@ function openWebSocket() {
   };
 
   ws.onerror = (err) => {
-    console.error("Karaoke Filter: WebSocket error", err);
+    console.error("Karafilt: WebSocket error", err);
     sendAIStatus("error");
   };
 
   ws.onclose = (event) => {
-    console.log("Karaoke Filter: WebSocket closed, code:", event.code, "reason:", event.reason);
+    console.log("Karafilt: WebSocket closed, code:", event.code, "reason:", event.reason);
     // If unexpected close while in AI mode, fall back to STFT preview
     if (isAIMode(currentMode) && workletGainNode) {
       workletGainNode.gain.value = 1.0;
@@ -599,7 +599,7 @@ function closeWebSocket() {
 function onAIAudioProcess(e) {
   if (!isAIMode(currentMode)) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.log("Karaoke Filter: AI audio process skipped — WebSocket not open (state:", ws ? ws.readyState : "null", ")");
+    console.log("Karafilt: AI audio process skipped — WebSocket not open (state:", ws ? ws.readyState : "null", ")");
     return;
   }
 
@@ -624,12 +624,12 @@ function onAIAudioProcess(e) {
 
 function sendAIChunk() {
   if (!ws || ws.readyState !== WebSocket.OPEN || !audioContext) {
-    console.log("Karaoke Filter: sendAIChunk skipped — ws:", ws ? ws.readyState : "null", "audioContext:", !!audioContext);
+    console.log("Karafilt: sendAIChunk skipped — ws:", ws ? ws.readyState : "null", "audioContext:", !!audioContext);
     return;
   }
 
   const totalSamples = aiRecordedSamples;
-  console.log(`Karaoke Filter: sending AI chunk — ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s)`);
+  console.log(`Karafilt: sending AI chunk — ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s)`);
   const left = new Float32Array(totalSamples);
   const right = new Float32Array(totalSamples);
   let offset = 0;
@@ -785,7 +785,7 @@ function fetchModelsFromServer() {
 }
 
 function stopCapture() {
-  console.log("Karaoke Filter: stopCapture called");
+  console.log("Karafilt: stopCapture called");
   console.trace("stopCapture trace");
   closeWebSocket();
   // Finalize any in-flight alignment before tearing down the AudioContext

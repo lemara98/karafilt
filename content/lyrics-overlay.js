@@ -1,4 +1,4 @@
-// Karaoke Filter — Lyrics Data Provider (Content Script)
+// Karafilt — Lyrics Data Provider (Content Script)
 // Runs on every page. Extracts song metadata + lyrics from:
 //   1. LRCLib (via service worker)
 //   2. YouTube captions (via MAIN-world injector)
@@ -690,7 +690,7 @@
         return;
       }
     } catch (e) {
-      console.warn("Karaoke Filter: caption extraction failed", e);
+      console.warn("Karafilt: caption extraction failed", e);
     }
 
     if (isStale()) return;
