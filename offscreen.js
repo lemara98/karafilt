@@ -556,6 +556,25 @@ function openWebSocket() {
       workletGainNode.gain.linearRampToValueAtTime(0.0, now + 0.5);
       aiOutputGainNode.gain.linearRampToValueAtTime(1.0, now + 0.5);
       sendAIStatus("ai_active");
+
+      // The queued AI audio represents content from ~aiCaptureStartCtxTime
+      // onwards, but the video element has advanced (now - that) seconds
+      // beyond it. Seek the video back so frames match the audio about to
+      // play. Re-anchor the lag clock so lyric-sync reports ~0 during the
+      // synced window. Drift may return after the prebuffered chunks play
+      // out (duplicate captures during the rewatch period); toggling AI
+      // off/on re-syncs.
+      if (aiCaptureStartCtxTime !== null) {
+        const seekBackSeconds = now - aiCaptureStartCtxTime;
+        if (seekBackSeconds > 0.05) {
+          chrome.runtime.sendMessage({
+            type: "MEDIA_SEEK_RELATIVE",
+            deltaSeconds: -seekBackSeconds,
+          }).catch(() => {});
+          aiCaptureStartCtxTime = now;
+          aiPlayedSamples = 0;
+        }
+      }
     }
 
     if (!aiPlaying && aiChunksReceived >= AI_PREBUFFER_CHUNKS) playNextAIChunk();

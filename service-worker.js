@@ -550,6 +550,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Re-broadcast the AI playback-lag value to the side panel so it can
       // shift the lyric highlight to match the delayed backend audio.
       chrome.runtime.sendMessage(message).catch(() => {});
+    } else if (message.type === "MEDIA_SEEK_RELATIVE") {
+      // Forward the AI sync seek request to the captured tab's content
+      // script, which is the only context that can poke the <video> element.
+      if (capturedTabId !== null) {
+        chrome.tabs.sendMessage(capturedTabId, message).catch(() => {});
+      }
     } else if (message.type === "ALIGN_RESULT") {
       handleAlignResult(message);
     }

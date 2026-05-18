@@ -942,6 +942,24 @@
       } catch {
         // Media element may have been torn down by the page — ignore.
       }
+    } else if (message.type === "MEDIA_SEEK_RELATIVE") {
+      // AI sync: offscreen finished prebuffering and the queued AI audio
+      // represents video content from ~L seconds ago. Seek the video back by
+      // L so the user sees frames matching the audio they're about to hear.
+      // One-shot per AI session; drift may return after the prebuffered
+      // chunks play out — toggling AI off/on resets it.
+      const m = mediaElement && document.contains(mediaElement) ? mediaElement : findMedia();
+      if (!m) return;
+      mediaElement = m;
+      const delta = Number(message.deltaSeconds);
+      if (!isFinite(delta)) return;
+      try {
+        const newTime = Math.max(0, m.currentTime + delta);
+        m.currentTime = newTime;
+        console.log(`[KFL-CS] AI sync seek: ${delta.toFixed(2)}s → currentTime=${newTime.toFixed(2)}s`);
+      } catch {
+        // currentTime is settable only when readyState ≥ 1 — ignore otherwise.
+      }
     } else if (message.type === "ALIGN_STATUS") {
       const keys = currentSongKeys();
       if (message.songKey && !keys.includes(message.songKey)) return;
