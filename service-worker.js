@@ -167,6 +167,10 @@ function normalizeForMatch(s) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")  // strip diacritics (ć→c, ž→z, …)
+    // Drop the same metadata noise words cleanTitle strips in bracket/paren
+    // form — covers cases where the noise survives cleanTitle (different
+    // delimiters, mid-string, or the YouTube metadata path bypasses it).
+    .replace(/\b(hd|hq|4k|1080p?|audio|video|lyrics?|official|live|remaster(?:ed)?|stereo|mono)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")        // collapse non-alphanumeric to spaces
     .trim();
 }

@@ -14,13 +14,6 @@
       "js": ["content/lyrics-overlay.js"],
       "run_at": "document_idle",
       "all_frames": false
-    },
-    {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["content/yt-captions-injector.js"],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": false
     }
   ],
   "action": {

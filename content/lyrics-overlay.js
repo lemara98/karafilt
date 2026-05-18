@@ -11,9 +11,11 @@
   window.__karaokeFilterLyricsLoaded = true;
 
   // ─── Feature flags ──────────────────────────────────────────────────────
-  // For Chrome Web Store publishing, consider setting this to false and
-  // removing the yt-captions-injector.js entry from manifest.json.
-  const ENABLE_YT_CAPTION_EXTRACTION = true;
+  // YouTube caption extraction is disabled: it requires a MAIN-world script
+  // that intercepts YouTube's own timedtext fetches, which sits in a gray area
+  // for Chrome Web Store policy. LRCLib (+ Lyrics.ovh + Genius fallbacks)
+  // covers our use cases.
+  const ENABLE_YT_CAPTION_EXTRACTION = false;
   // ────────────────────────────────────────────────────────────────────────
 
   // --- State ---
@@ -45,22 +47,52 @@
     /\s*\(lyrics?[^)]*\)/i,
     /\s*\[lyrics?[^\]]*\]/i,
     /\s*\(audio\)/i,
+    /\s*\[audio\]/i,
     /\s*\(hd\)/i,
+    /\s*\[hd\]/i,
+    /\s*\(hq\)/i,
+    /\s*\[hq\]/i,
     /\s*\(4k\)/i,
+    /\s*\[4k\]/i,
+    /\s*\(1080p?\)/i,
+    /\s*\[1080p?\]/i,
     /\s*\(remaster(ed)?[^)]*\)/i,
+    /\s*\[remaster(ed)?[^\]]*\]/i,
     /\s*\(live[^)]*\)/i,
+    /\s*\[live[^\]]*\]/i,
     /\s*\(feat\.?[^)]*\)/i,
+    /\s*\[feat\.?[^\]]*\]/i,
     /\s*ft\.?\s+.+$/i,
     /\s*\(\d{4}[^)]*\)/,
+    /\s*\[\d{4}[^\]]*\]/,
     /\s*\| spotify$/i,
     /\s*- youtube$/i,
     /\s*- soundcloud$/i,
+    // Trailing ", First Last, First Last(, …)" — the YouTube convention for
+    // featured artists when the channel didn't use "feat." Requires at least
+    // two name-shaped groups (each: capital letter + lowercase word, optionally
+    // 1-2 more such words) so single trailing comma clauses stay untouched.
+    /(\s*,\s*[\p{Lu}]\p{Ll}+(?:\s+[\p{Lu}]\p{Ll}+){0,2}){2,}\s*$/u,
   ];
 
   function cleanTitle(s) {
     let out = s;
     for (const re of SUFFIX_PATTERNS) out = out.replace(re, "");
     return out.trim();
+  }
+
+  // When YouTube metadata gives us an artist AND the title starts with that
+  // same artist (e.g. "nipplepeople FRKA"), strip the duplicated prefix so
+  // the track candidate sent to LRCLib doesn't include the artist's name.
+  function stripArtistFromTrack(artist, track) {
+    if (!artist || !track) return track;
+    const lowerTrack = track.toLowerCase();
+    const lowerArtist = artist.toLowerCase();
+    if (lowerTrack.startsWith(lowerArtist + " ") ||
+        lowerTrack.startsWith(lowerArtist + "-")) {
+      return track.slice(artist.length).replace(/^[\s\-]+/, "").trim();
+    }
+    return track;
   }
 
   // Walk a script's text content from a marker keyword and return the JSON
@@ -221,7 +253,10 @@
     // otherwise we'd happily search lyrics for the previous song.
     const meta = extractYouTubeMetadata();
     if (meta && meta.track && metadataMatchesTitle(meta.track, rawTitle)) {
-      const cleanedTrack = cleanTitle(meta.track);
+      let cleanedTrack = cleanTitle(meta.track);
+      // Drop the duplicated artist prefix if present — turns
+      // "nipplepeople FRKA" into "FRKA" when meta.artist="Nipplepeople".
+      if (meta.artist) cleanedTrack = stripArtistFromTrack(meta.artist, cleanedTrack);
       // Skip the metadata candidate when the track itself still contains a
       // dash separator — that means ytInitialPlayerResponse.title is just
       // the raw video title (typical for non-"Topic" channels). The dash-
