@@ -26,7 +26,7 @@
   const DEFAULTS = {
     mode: "stft",
     mix: 100,
-    aiModel: "htdemucs",
+    aiModel: "mdx_extra_q",
     serverUrl: "ws://localhost:9876",
     apiKey: "",
   };

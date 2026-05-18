@@ -8,12 +8,13 @@ except ImportError:
     HAS_AUDIO_SEPARATOR = False
 
 
-# Registry of available models with display info
+# Registry of available models with display info. Order matters: the first
+# entry is the default low-latency choice and appears first in the picker.
 DEMUCS_MODELS = {
-    "htdemucs":     "Demucs Hybrid Transformer (recommended)",
-    "htdemucs_ft":  "Demucs Fine-Tuned (slow, high VRAM)",
+    "mdx_extra_q":  "MDX-Net Extra Quantized (low-latency default)",
+    "htdemucs":     "Demucs Hybrid Transformer (balanced)",
     "mdx_extra":    "MDX-Net Extra",
-    "mdx_extra_q":  "MDX-Net Extra (quantized, faster)",
+    "htdemucs_ft":  "Demucs Fine-Tuned (highest quality, slow, high VRAM)",
 }
 
 # audio-separator models (only if package is installed)

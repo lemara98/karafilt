@@ -109,10 +109,10 @@ The server auto-detects GPU (CUDA) and falls back to CPU. First run downloads th
 ### Supported AI Models
 
 **Demucs** (built-in):
-- `htdemucs_ft` — Fine-tuned (default, best quality)
-- `htdemucs` — Standard
+- `mdx_extra_q` — MDX quantized (default, low-latency)
+- `htdemucs` — Hybrid Transformer (balanced)
 - `mdx_extra` — MDX variant
-- `mdx_extra_q` — MDX quantized
+- `htdemucs_ft` — Fine-tuned (highest quality, slow, high VRAM)
 
 **Audio Separator** (optional, install separately):
 - BS-Roformer, Mel-Roformer, MDX23C, UVR-MDX-NET

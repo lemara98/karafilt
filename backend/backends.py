@@ -70,7 +70,7 @@ class DemucsBackend:
             with torch.no_grad():
                 return apply_model(model, audio, **kwargs)
 
-    def process(self, pcm_float32, input_sr, model_name="htdemucs", two_pass=False):
+    def process(self, pcm_float32, input_sr, model_name="mdx_extra_q", two_pass=False):
         model = self._get_model(model_name)
         sr = model.samplerate
 
@@ -216,5 +216,5 @@ class ModelManager:
         elif HAS_AUDIO_SEPARATOR and model_name in SEPARATOR_MODELS:
             return self.audio_sep.process(pcm_float32, input_sr, model_name, two_pass)
         else:
-            print(f"Unknown model '{model_name}', falling back to htdemucs")
-            return self.demucs.process(pcm_float32, input_sr, "htdemucs", two_pass)
+            print(f"Unknown model '{model_name}', falling back to mdx_extra_q")
+            return self.demucs.process(pcm_float32, input_sr, "mdx_extra_q", two_pass)

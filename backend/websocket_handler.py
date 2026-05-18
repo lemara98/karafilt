@@ -13,7 +13,7 @@ import aligner
 async def handle_client(websocket, manager, auth_token=None):
     """Handle a WebSocket connection from the browser extension."""
     print(f"Client connected: {websocket.remote_address}")
-    session_model = "htdemucs"
+    session_model = "mdx_extra_q"
     session_two_pass = False
     authenticated = auth_token is None  # no token required = auto-authenticated
 
@@ -63,7 +63,7 @@ async def handle_client(websocket, manager, auth_token=None):
                     }))
 
                 elif msg_type == "set_model":
-                    session_model = data.get("value", "htdemucs")
+                    session_model = data.get("value", "mdx_extra_q")
                     print(f"Model switched to: {session_model}")
 
                 elif msg_type == "set_two_pass":
