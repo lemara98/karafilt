@@ -32,10 +32,12 @@ function sendAIStatus(status, detail) {
 // Server settings are pushed in from the service worker (offscreen
 // docs can't access chrome.storage directly — only chrome.runtime).
 
-// AI mode state
-const AI_CHUNK_SECONDS = 5;
-const AI_OVERLAP_SECONDS = 1;  // overlap between consecutive chunks
-const AI_PREBUFFER_CHUNKS = 2; // wait for 2 chunks before crossfading to AI
+// AI mode state. Chunk sizing trades steady-state latency for Demucs quality:
+// shorter chunks → smaller lag, but Demucs sees less context per inference
+// (its internal SEGMENT_SECONDS is 3.0, so 2s inputs run as a single segment).
+const AI_CHUNK_SECONDS = 2;
+const AI_OVERLAP_SECONDS = 0.5; // overlap between consecutive chunks (~25% of chunk)
+const AI_PREBUFFER_CHUNKS = 1;  // wait for 1 chunk before crossfading to AI
 let aiRecordBuffers = [[], []];
 let aiRecordedSamples = 0;
 let aiOverlapBuffers = [null, null]; // stores tail of previous chunk for overlap
