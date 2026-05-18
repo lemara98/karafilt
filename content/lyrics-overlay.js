@@ -351,6 +351,7 @@
             track: c.track,
             lrclibOnly: !!(opts && opts.lrclibOnly),
             forceRefresh: !!(opts && opts.forceRefresh),
+            skipLrclib: !!(opts && opts.skipLrclib),
           },
           (res) => {
             if (chrome.runtime.lastError) {
@@ -408,10 +409,11 @@
     }
 
     // Phase 2: full chain (LRCLib already known to miss, so this is really
-    // Lyrics.ovh + Genius) on the cleanest candidate.
+    // Lyrics.ovh + Genius) on the cleanest candidate. skipLrclib avoids a
+    // redundant LRCLib round-trip — phase 1 already tried it for every candidate.
     const fallback = pickFallbackCandidate(candidates);
     if (fallback) {
-      const result = await sendFetchLyrics(fallback, { lrclibOnly: false, forceRefresh });
+      const result = await sendFetchLyrics(fallback, { lrclibOnly: false, forceRefresh, skipLrclib: true });
       if (result.invalidated) return result;
       if (result.found) return result;
     }

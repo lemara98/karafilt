@@ -46,6 +46,11 @@ let currentLineIndex = -1;
 let activeTabId = null;
 let hasMedia = false;
 let lastPlaybackTime = 0;
+// Seconds the AI/server-mode audio lags the original video. The offscreen doc
+// measures it and reports it via AI_LAG; we shift the lyric highlight back by
+// this much so lyrics line up with the delayed backend audio. 0 in all other
+// modes (and when the AI queue drains back to the real-time STFT preview).
+let aiLagSeconds = 0;
 let lastRenderedCount = 0;
 let lastRenderedMode = null;  // "synced" | "plain" | null
 // Full set of matches the LRCLib lookup returned — primary at index 0
@@ -227,6 +232,7 @@ if (refreshBtn) {
       currentMatchIdx = -1;
       currentLineIndex = -1;
       lastPlaybackTime = 0;
+      aiLagSeconds = 0;
       lastRenderedCount = 0;
       lastRenderedMode = null;
       setSourceBadge("");
@@ -381,11 +387,15 @@ function syncToPlaybackTime(t) {
     if (syncLogCount++ < 3) console.log("[KFL-Sidepanel] sync skipped — no lines yet");
     return;
   }
-  // Binary search for the last line with time <= t
+  // Shift the highlight back by the AI playback lag so lyrics match the
+  // delayed backend audio. aiLagSeconds is 0 in non-AI modes, so this is a
+  // no-op there.
+  const adjusted = t - aiLagSeconds;
+  // Binary search for the last line with time <= adjusted
   let lo = 0, hi = parsedLines.length - 1, found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (parsedLines[mid].time <= t) {
+    if (parsedLines[mid].time <= adjusted) {
       found = mid;
       lo = mid + 1;
     } else {
@@ -394,16 +404,28 @@ function syncToPlaybackTime(t) {
   }
   if (syncLogCount++ < 5) {
     console.log(
-      `[KFL-Sidepanel] sync t=${t.toFixed(2)}s, lines=${parsedLines.length}, ` +
+      `[KFL-Sidepanel] sync t=${adjusted.toFixed(2)}s (raw=${t.toFixed(2)}, lag=${aiLagSeconds.toFixed(2)}), lines=${parsedLines.length}, ` +
       `firstTime=${parsedLines[0]?.time?.toFixed(2)}, lastTime=${parsedLines[parsedLines.length - 1]?.time?.toFixed(2)}, ` +
       `found=${found}`
     );
   }
   if (found >= 0) {
     highlightLine(found);
-    updateWordHighlight(t);
+    updateWordHighlight(adjusted);
   }
 }
+
+// AI playback-lag update from the offscreen doc (via SW re-broadcast →
+// controls-bindings.js). Re-runs the sync immediately so the highlight shifts
+// without waiting for the next PLAYBACK_TIME tick.
+window.onAILagUpdate = (lag) => {
+  const next = (typeof lag === "number" && isFinite(lag) && lag >= 0) ? lag : 0;
+  if (next === aiLagSeconds) return;
+  aiLagSeconds = next;
+  if (parsedLines.length > 0 && lastPlaybackTime > 0) {
+    syncToPlaybackTime(lastPlaybackTime);
+  }
+};
 
 // --- Active tab tracking ---
 async function getActiveTab() {
@@ -419,6 +441,7 @@ function resetDisplay(statusText) {
   currentLineIndex = -1;
   hasMedia = false;
   lastPlaybackTime = 0;
+  aiLagSeconds = 0;
   lastRenderedCount = 0;
   lastRenderedMode = null;
   songTitleEl.textContent = "—";

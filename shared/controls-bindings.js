@@ -25,7 +25,7 @@
 
   const DEFAULTS = {
     mode: "stft",
-    mix: 85,
+    mix: 100,
     aiModel: "htdemucs",
     serverUrl: "ws://localhost:9876",
     apiKey: "",
@@ -277,6 +277,13 @@
         // Broadcast from the SW so popup + side panel agree on Start/Stop
         // even when the OTHER surface initiated the change.
         setActiveUI(!!message.isActive);
+      } else if (message.type === "AI_LAG") {
+        // AI playback-lag (seconds) from the offscreen doc, re-broadcast by the
+        // SW. The side panel uses it to shift the lyric highlight; the popup
+        // simply never defines the hook.
+        if (typeof window.onAILagUpdate === "function") {
+          window.onAILagUpdate(message.lagSeconds);
+        }
       }
     });
 

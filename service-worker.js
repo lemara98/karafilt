@@ -4,10 +4,27 @@ let capturedTabId = null;
 let capturedTabUrl = null;
 let currentAIStatus = { status: "idle", detail: null };
 
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((err) => console.error("[SW] setPanelBehavior failed:", err));
+
 // In-memory cache for LRCLib lookups — keeps us from hammering the API
 // on title-watchers that fire multiple times per page.
 const lyricsCache = new Map();
 const LYRICS_CACHE_MAX = 50;
+
+// fetch() with a hard deadline. Without this, a slow/hung upstream blocks
+// until the browser's default socket timeout (~30-120s). An aborted fetch
+// throws — every call site handles that as a clean miss.
+async function fetchWithTimeout(url, opts, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...(opts || {}), signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // Smart-sync (forced alignment) state
 const alignmentInProgress = new Set();   // song keys currently being aligned
@@ -73,6 +90,7 @@ async function maybeStartAlignment({ tabId, songKey, lyrics }) {
 async function handleFetchLyrics(artist, track, tabId, opts) {
   const lrclibOnly = !!(opts && opts.lrclibOnly);
   const forceRefresh = !!(opts && opts.forceRefresh);
+  const skipLrclib = !!(opts && opts.skipLrclib);
   const songKey = cacheKey(artist, track);
 
   // Cache hit: return the previously aligned synced lines directly. Skipped
@@ -90,7 +108,7 @@ async function handleFetchLyrics(artist, track, tabId, opts) {
     }
   }
 
-  const result = await fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh });
+  const result = await fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh, skipLrclib });
 
   // If we got plain text only, fire alignment in the background. syncedLyrics
   // already covers the synced case; no need to align.
@@ -272,7 +290,7 @@ function cleanGeniusLyrics(text) {
 
 async function fetchGeniusPageLyrics(url) {
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, null, 6000);
     if (!res.ok) return null;
     const html = await res.text();
     const raw = extractGeniusLyricsFromHtml(html);
@@ -289,7 +307,7 @@ async function fetchFromGenius(artist, track) {
   const query = (artist ? `${artist} ${track}` : track).trim();
   try {
     const searchUrl = `https://genius.com/api/search/multi?per_page=10&q=${encodeURIComponent(query)}`;
-    const sres = await fetch(searchUrl, { headers: { "Accept": "application/json" } });
+    const sres = await fetchWithTimeout(searchUrl, { headers: { "Accept": "application/json" } }, 5000);
     if (!sres.ok) return { found: false };
     const sdata = await sres.json();
 
@@ -322,34 +340,20 @@ async function fetchFromGenius(artist, track) {
 
     if (matching.length === 0) return { found: false };
 
-    // Fetch primary + up to 3 alternative pages in parallel so the side panel
-    // can offer the user a "wrong song?" picker without extra round trips.
-    const fetched = await Promise.all(
-      matching.slice(0, 4).map(async (h) => ({
-        h,
-        lyrics: await fetchGeniusPageLyrics(h.url),
-      }))
-    );
-    const usable = fetched.filter((x) => x.lyrics);
-    if (usable.length === 0) return { found: false };
-
-    const primary = usable[0];
-    const alternatives = usable.slice(1).map((x) => ({
-      trackName: x.h.title,
-      artistName: x.h.artist,
-      syncedLyrics: null,
-      plainLyrics: x.lyrics,
-      source: "genius",
-    }));
+    // Fetch only the single best-match page. Scraping the alternative pages
+    // too (for the "wrong song?" picker) tripled-to-quadrupled tail latency
+    // for a feature the user rarely opens.
+    const primaryLyrics = await fetchGeniusPageLyrics(matching[0].url);
+    if (!primaryLyrics) return { found: false };
 
     return {
       found: true,
       syncedLyrics: null,
-      plainLyrics: primary.lyrics,
-      trackName: primary.h.title,
-      artistName: primary.h.artist,
+      plainLyrics: primaryLyrics,
+      trackName: matching[0].title,
+      artistName: matching[0].artist,
       source: "genius",
-      alternatives,
+      alternatives: [],
     };
   } catch (err) {
     console.error("[SW] Genius fetch failed:", err);
@@ -363,7 +367,7 @@ async function fetchFromLyricsOvh(artist, track) {
   if (!artist || !track) return { found: false };
   const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`;
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, null, 5000);
     if (!res.ok) return { found: false };
     const data = await res.json();
     if (data && typeof data.lyrics === "string" && data.lyrics.trim().length > 30) {
@@ -383,34 +387,45 @@ async function fetchFromLyricsOvh(artist, track) {
 async function fetchFromLRCLib(artist, track, opts) {
   const lrclibOnly = !!(opts && opts.lrclibOnly);
   const forceRefresh = !!(opts && opts.forceRefresh);
+  // skipLrclib: phase 2 of the content-script loop has already tried LRCLib
+  // for every candidate, so re-running /api/get + /api/search here is wasted
+  // network time — jump straight to the Lyrics.ovh + Genius fallbacks.
+  const skipLrclib = !!(opts && opts.skipLrclib);
   const key = cacheKey(artist, track);
   if (!forceRefresh && lyricsCache.has(key)) return lyricsCache.get(key);
 
   let result = { found: false };
-  try {
+  // lrclibOnly + skipLrclib leaves nothing to do — a clean miss.
+  if (lrclibOnly && skipLrclib) return result;
+
+  const t0 = performance.now();
+  let lrclibMs = 0;
+  if (!skipLrclib) {
+   try {
     // Fire /api/get (exact pair) and /api/search (free-text) in parallel,
     // then merge. We can't trust /api/get alone: it'll happily return the
     // plain version of a song even when a synced version exists under a
     // slightly different artist/track spelling. Running both concurrently
     // costs the same wall-clock as the slower one (~400ms) and gives us the
-    // full set of fuzzy matches to score from.
+    // full set of fuzzy matches to score from. Each branch catches its own
+    // error so a timeout on one doesn't discard the other's result.
     const getPromise = (artist && track)
       ? (async () => {
           const params = new URLSearchParams();
           params.set("artist_name", artist);
           params.set("track_name", track);
-          const r = await fetch(`https://lrclib.net/api/get?${params.toString()}`);
+          const r = await fetchWithTimeout(`https://lrclib.net/api/get?${params.toString()}`, null, 5000);
           if (!r.ok) return null;
           return await r.json();
-        })()
+        })().catch(() => null)
       : Promise.resolve(null);
 
     const searchPromise = (async () => {
       const q = artist ? `${track} ${artist}` : track;
-      const r = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`);
+      const r = await fetchWithTimeout(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, null, 5000);
       if (!r.ok) return [];
       return await r.json();
-    })();
+    })().catch(() => []);
 
     const [getData, searchArr] = await Promise.all([getPromise, searchPromise]);
 
@@ -467,28 +482,47 @@ async function fetchFromLRCLib(artist, track, opts) {
         })),
       };
     }
-  } catch (err) {
+   } catch (err) {
     console.error("[SW] LRCLib fetch failed:", err);
+   }
+   lrclibMs = performance.now() - t0;
   }
 
   // Skip the heavyweight fallbacks during phase 1 of the content-script's
   // two-phase loop — Genius alone takes ~3-5s per candidate, which adds up
   // to ~30s when LRCLib misses on every candidate.
+  let ovhMs = 0;
+  let geniusMs = 0;
   if (!lrclibOnly) {
     // If LRCLib found nothing, try Lyrics.ovh as a secondary source.
     // Lyrics.ovh requires both artist and track in the URL path — skip it for
     // track-only candidates.
     if (!result.found && artist) {
+      const ovhStart = performance.now();
       const ovh = await fetchFromLyricsOvh(artist, track);
+      ovhMs = performance.now() - ovhStart;
       if (ovh.found) result = ovh;
     }
 
     // Final fallback: Genius (web scrape). Wider coverage than the JSON APIs.
     if (!result.found) {
+      const geniusStart = performance.now();
       const gen = await fetchFromGenius(artist, track);
+      geniusMs = performance.now() - geniusStart;
       if (gen.found) result = gen;
     }
   }
+
+  // One-line latency summary so "why so long" is answerable from the console.
+  const totalMs = Math.round(performance.now() - t0);
+  const parts = [];
+  if (!skipLrclib) parts.push(`lrclib ${Math.round(lrclibMs)}ms`);
+  if (ovhMs) parts.push(`ovh ${Math.round(ovhMs)}ms`);
+  if (geniusMs) parts.push(`genius ${Math.round(geniusMs)}ms`);
+  console.log(
+    `[SW] lyrics: ${result.found ? `${result.source} hit` : "miss"} in ${totalMs}ms` +
+      (parts.length ? ` (${parts.join(", ")})` : "")
+  );
 
   // Don't cache LRCLib-only misses — phase 2 of the content-script loop will
   // re-call us with the full chain enabled, and a cached `{found: false}` from
@@ -511,6 +545,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "AI_STATUS") {
       currentAIStatus = { status: message.status, detail: message.detail || null };
       // Re-broadcast so the popup receives it
+      chrome.runtime.sendMessage(message).catch(() => {});
+    } else if (message.type === "AI_LAG") {
+      // Re-broadcast the AI playback-lag value to the side panel so it can
+      // shift the lyric highlight to match the delayed backend audio.
       chrome.runtime.sendMessage(message).catch(() => {});
     } else if (message.type === "ALIGN_RESULT") {
       handleAlignResult(message);
@@ -567,6 +605,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleFetchLyrics(message.artist, message.track, tabId, {
         lrclibOnly: !!message.lrclibOnly,
         forceRefresh: !!message.forceRefresh,
+        skipLrclib: !!message.skipLrclib,
       }).then(sendResponse);
       return true; // async response
     }

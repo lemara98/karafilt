@@ -47,6 +47,55 @@ let aiGainNode = null;
 let workletGainNode = null;  // controls worklet volume (fades out when AI plays)
 let aiOutputGainNode = null; // controls AI playback volume
 
+// ── AI playback-lag measurement ─────────────────────────────────────────────
+// Capture runs in real time, so "captured seconds" tracks the video; "played
+// seconds" is the cumulative AI-processed audio actually emitted. The gap is
+// how far the AI audio lags the video — the side panel shifts the lyric
+// highlight back by this so lyrics line up with what the user hears.
+let aiCaptureStartCtxTime = null;     // ctx time of the first captured AI frame
+let aiPlayedSamples = 0;              // cumulative samples of fully-played chunks
+let aiCurrentChunkStartCtxTime = null;// ctx time the in-flight source.start() ran
+let aiCurrentChunkSampleRate = 0;
+let aiCurrentChunkSamples = 0;        // in-flight chunk length
+let aiAudible = false;                // true only while AI output is the audible path
+let lastReportedLag = -1;             // dedupe AI_LAG sends
+
+function resetAILagState() {
+  aiCaptureStartCtxTime = null;
+  aiPlayedSamples = 0;
+  aiCurrentChunkStartCtxTime = null;
+  aiCurrentChunkSampleRate = 0;
+  aiCurrentChunkSamples = 0;
+  aiAudible = false;
+  lastReportedLag = -1;
+}
+
+function computeLagSeconds() {
+  if (!audioContext || !aiAudible || aiCaptureStartCtxTime === null) return 0;
+  const capturedSeconds = audioContext.currentTime - aiCaptureStartCtxTime;
+  let playedSeconds = aiPlayedSamples / audioContext.sampleRate;
+  if (aiCurrentChunkSamples > 0 && aiCurrentChunkStartCtxTime !== null) {
+    const elapsed = audioContext.currentTime - aiCurrentChunkStartCtxTime;
+    const chunkDur = aiCurrentChunkSamples / aiCurrentChunkSampleRate;
+    playedSeconds += Math.max(0, Math.min(elapsed, chunkDur));
+  }
+  return Math.max(0, capturedSeconds - playedSeconds);
+}
+
+function reportLag() {
+  const rounded = Math.round(computeLagSeconds() * 100) / 100;
+  if (rounded === lastReportedLag) return;
+  lastReportedLag = rounded;
+  chrome.runtime.sendMessage({ type: "AI_LAG", lagSeconds: rounded });
+}
+
+// Reset lag tracking and tell the side panel the offset is back to 0 — used on
+// every AI teardown path (mode change, stop, websocket close).
+function emitZeroLag() {
+  resetAILagState();
+  chrome.runtime.sendMessage({ type: "AI_LAG", lagSeconds: 0 });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[OFFSCREEN] received message:", message.type, "from:", sender.url || sender.id || "unknown");
   if (sender.tab) return;
@@ -525,6 +574,7 @@ function openWebSocket() {
       if (aiOutputGainNode) aiOutputGainNode.gain.value = 0.0;
       sendAIStatus("fallback");
     }
+    emitZeroLag();
   };
 }
 
@@ -543,6 +593,7 @@ function closeWebSocket() {
   aiPlaying = false;
   aiChunksReceived = 0;
   aiChunksSent = 0;
+  emitZeroLag();
 }
 
 function onAIAudioProcess(e) {
@@ -550,6 +601,12 @@ function onAIAudioProcess(e) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     console.log("Karaoke Filter: AI audio process skipped — WebSocket not open (state:", ws ? ws.readyState : "null", ")");
     return;
+  }
+
+  // Anchor the lag clock at the first real captured frame — this is the
+  // program-time-0 the first played sample will also correspond to.
+  if (aiCaptureStartCtxTime === null && audioContext) {
+    aiCaptureStartCtxTime = audioContext.currentTime;
   }
 
   const left = e.inputBuffer.getChannelData(0);
@@ -621,6 +678,12 @@ function sendAIChunk() {
 function playNextAIChunk() {
   if (!audioContext || aiPlaybackQueue.length === 0) {
     aiPlaying = false;
+    // Queue drained — fold the chunk that just finished, then the audible
+    // output is the near-zero-latency STFT preview again, so lag is 0.
+    if (aiCurrentChunkSamples > 0) aiPlayedSamples += aiCurrentChunkSamples;
+    aiCurrentChunkSamples = 0;
+    aiCurrentChunkStartCtxTime = null;
+    aiAudible = false;
     // If queue is empty and we're still in AI mode, fade back to STFT preview
     if (isAIMode(currentMode) && workletGainNode && aiOutputGainNode) {
       const now = audioContext.currentTime;
@@ -628,11 +691,20 @@ function playNextAIChunk() {
       aiOutputGainNode.gain.linearRampToValueAtTime(0.0, now + 0.3);
       sendAIStatus("stft_preview");
     }
+    reportLag();
     return;
   }
 
   aiPlaying = true;
   const chunk = aiPlaybackQueue.shift();
+
+  // The chunk that was in flight has now finished (onended fired) — fold its
+  // full length into the played total before tracking the new one.
+  if (aiCurrentChunkSamples > 0) aiPlayedSamples += aiCurrentChunkSamples;
+  aiCurrentChunkSamples = chunk.left.length;
+  aiCurrentChunkSampleRate = chunk.sampleRate;
+  aiCurrentChunkStartCtxTime = audioContext.currentTime;
+  aiAudible = true;
 
   const buffer = audioContext.createBuffer(2, chunk.left.length, chunk.sampleRate);
   buffer.getChannelData(0).set(chunk.left);
@@ -643,6 +715,8 @@ function playNextAIChunk() {
   source.connect(aiOutputGainNode);
   source.onended = playNextAIChunk;
   source.start();
+
+  reportLag();
 }
 
 function cleanupAudio() {

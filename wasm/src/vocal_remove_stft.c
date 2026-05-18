@@ -46,6 +46,18 @@ static kiss_fft_cpx spec_l[NUM_BINS];
 static kiss_fft_cpx spec_r[NUM_BINS];
 
 /* Parameters */
+/* Soft taper band edges (Hz):
+ * below ramp_lo_hz: untouched (bass protection)
+ * ramp_lo_hz..full_lo_hz: attenuation ramps 0 -> 1
+ * full_lo_hz..full_hi_hz: full attenuation envelope
+ * full_hi_hz..ramp_hi_hz: attenuation ramps 1 -> 0 */
+static float ramp_lo_hz = 90.0f;
+static float full_lo_hz = 160.0f;    /* protects kick/bass fundamentals */
+static float full_hi_hz = 9000.0f;
+static float ramp_hi_hz = 12000.0f;  /* catches sibilance/air */
+static float centerness_exponent = 1.5f;  /* >1 sharpens the center mask */
+
+/* legacy fields kept so stft_set_vocal_range stays export-safe (now inert) */
 static float vocal_low_hz = 100.0f;
 static float vocal_high_hz = 8000.0f;
 static float attenuation = 0.85f;
@@ -67,6 +79,23 @@ static void build_window(void) {
     }
 }
 
+/* Raised-cosine ramp: 0 below x=0, 1 above x=1, smooth in between. */
+static inline float taper_ramp(float x) {
+    if (x <= 0.0f) return 0.0f;
+    if (x >= 1.0f) return 1.0f;
+    return 0.5f * (1.0f - cosf(3.14159265358979f * x));
+}
+
+/* Per-bin frequency weight from the soft band edges (0 = untouched, 1 = full). */
+static float band_weight(float freq_hz) {
+    if (freq_hz <= ramp_lo_hz || freq_hz >= ramp_hi_hz) return 0.0f;
+    if (freq_hz < full_lo_hz)
+        return taper_ramp((freq_hz - ramp_lo_hz) / (full_lo_hz - ramp_lo_hz));
+    if (freq_hz > full_hi_hz)
+        return taper_ramp((ramp_hi_hz - freq_hz) / (ramp_hi_hz - full_hi_hz));
+    return 1.0f;
+}
+
 static void process_one_frame(void) {
     /* Apply analysis window */
     for (int i = 0; i < FFT_SIZE; i++) {
@@ -78,27 +107,44 @@ static void process_one_frame(void) {
     kiss_fftr(fft_fwd, frame_l, spec_l);
     kiss_fftr(fft_fwd, frame_r, spec_r);
 
-    /* Frequency-selective center cancellation */
-    int bin_low  = (int)(vocal_low_hz * FFT_SIZE / sample_rate_hz);
-    int bin_high = (int)(vocal_high_hz * FFT_SIZE / sample_rate_hz);
-    if (bin_low < 1) bin_low = 1;
-    if (bin_high >= NUM_BINS) bin_high = NUM_BINS - 1;
+    /* Frequency-selective, pan-and-coherence-weighted center cancellation.
+     * A bin is only attenuated to the degree it is BOTH level-balanced and
+     * phase-coherent between L/R — i.e. genuinely center-panned, like a lead
+     * vocal — so hard-panned instruments and reverb in the vocal range survive. */
+    const float bin_hz = sample_rate_hz / (float)FFT_SIZE;
+    const float EPS = 1e-9f;
 
-    for (int k = 0; k < NUM_BINS; k++) {
-        if (k >= bin_low && k <= bin_high) {
-            float mid_r = (spec_l[k].r + spec_r[k].r) * 0.5f;
-            float mid_i = (spec_l[k].i + spec_r[k].i) * 0.5f;
-            float side_l_r = spec_l[k].r - mid_r;
-            float side_l_i = spec_l[k].i - mid_i;
-            float side_r_r = spec_r[k].r - mid_r;
-            float side_r_i = spec_r[k].i - mid_i;
+    for (int k = 1; k < NUM_BINS; k++) {  /* k=0 (DC) skipped -> bass protection */
+        float fw = band_weight((float)k * bin_hz);
+        if (fw <= 0.0f) continue;          /* outside soft band: bin untouched */
 
-            float keep = 1.0f - attenuation;
-            spec_l[k].r = side_l_r + mid_r * keep;
-            spec_l[k].i = side_l_i + mid_i * keep;
-            spec_r[k].r = side_r_r + mid_r * keep;
-            spec_r[k].i = side_r_i + mid_i * keep;
-        }
+        float lr = spec_l[k].r, li = spec_l[k].i;
+        float rr = spec_r[k].r, ri = spec_r[k].i;
+
+        float mag_l = sqrtf(lr * lr + li * li);
+        float mag_r = sqrtf(rr * rr + ri * ri);
+
+        /* magnitude balance: 1 when |L|==|R|, ->0 when one side dominates */
+        float bal = (2.0f * mag_l * mag_r) / (mag_l * mag_l + mag_r * mag_r + EPS);
+
+        /* phase coherence: cos(phase diff) = Re{L*conj(R)} / (|L||R|) */
+        float dot = lr * rr + li * ri;
+        float coh = dot / (mag_l * mag_r + EPS);
+        if (coh < 0.0f) coh = 0.0f;
+        if (coh > 1.0f) coh = 1.0f;
+
+        float centerness = powf(bal * coh, centerness_exponent);
+
+        float eff_atten = attenuation * fw * centerness;
+        if (eff_atten <= 0.0f) continue;
+        float keep = 1.0f - eff_atten;
+
+        float mid_r = (lr + rr) * 0.5f;
+        float mid_i = (li + ri) * 0.5f;
+        spec_l[k].r = (lr - mid_r) + mid_r * keep;
+        spec_l[k].i = (li - mid_i) + mid_i * keep;
+        spec_r[k].r = (rr - mid_r) + mid_r * keep;
+        spec_r[k].i = (ri - mid_i) + mid_i * keep;
     }
 
     /* Inverse FFT */
@@ -217,11 +263,31 @@ void stft_cleanup(void) {
 static float *cc_in_l = NULL, *cc_in_r = NULL;
 static float *cc_out_l = NULL, *cc_out_r = NULL;
 
+/* One-pole low-pass state for basic-mode bass protection. The center-cancel is
+ * applied only to the high-passed signal; the low-passed remainder is added
+ * back untouched, so kick/bass survive and mix==0 stays bit-exact passthrough. */
+static float bp_cutoff_hz = 150.0f;
+static float bp_lp_l = 0.0f, bp_lp_r = 0.0f;
+static float bp_coeff = 0.0f;
+static float bp_sr = 0.0f;            /* 0 forces a coefficient recompute */
+
+static void bp_update_coeff(void) {
+    if (bp_sr == sample_rate_hz) return;
+    bp_sr = sample_rate_hz;
+    float dt = 1.0f / bp_sr;
+    float rc = 1.0f / (2.0f * 3.14159265358979f * bp_cutoff_hz);
+    bp_coeff = dt / (rc + dt);
+}
+
 void init(int max_block_size) {
     cc_in_l  = (float *)malloc(max_block_size * sizeof(float));
     cc_in_r  = (float *)malloc(max_block_size * sizeof(float));
     cc_out_l = (float *)malloc(max_block_size * sizeof(float));
     cc_out_r = (float *)malloc(max_block_size * sizeof(float));
+
+    bp_lp_l = 0.0f;
+    bp_lp_r = 0.0f;
+    bp_sr = 0.0f;  /* recompute coefficient on first process call */
 }
 
 float *get_input_buffer_l(void)  { return cc_in_l; }
@@ -230,13 +296,29 @@ float *get_output_buffer_l(void) { return cc_out_l; }
 float *get_output_buffer_r(void) { return cc_out_r; }
 
 void process_center_cancel(int num_samples, float mix) {
+    bp_update_coeff();
     for (int i = 0; i < num_samples; i++) {
         float l = cc_in_l[i];
         float r = cc_in_r[i];
-        float side_l = (l - r) * 0.5f;
-        float side_r = (r - l) * 0.5f;
-        cc_out_l[i] = l * (1.0f - mix) + side_l * mix;
-        cc_out_r[i] = r * (1.0f - mix) + side_r * mix;
+
+        /* one-pole low-pass = protected bass content */
+        bp_lp_l += bp_coeff * (l - bp_lp_l);
+        bp_lp_r += bp_coeff * (r - bp_lp_r);
+        if (fabsf(bp_lp_l) < 1e-15f) bp_lp_l = 0.0f;  /* denormal guard */
+        if (fabsf(bp_lp_r) < 1e-15f) bp_lp_r = 0.0f;
+
+        float low_l = bp_lp_l, low_r = bp_lp_r;
+        float high_l = l - low_l, high_r = r - low_r;
+
+        /* fully-wet signal: protected bass + center-cancelled high band */
+        float side_l = (high_l - high_r) * 0.5f;
+        float side_r = (high_r - high_l) * 0.5f;
+        float wet_l = low_l + side_l;
+        float wet_r = low_r + side_r;
+
+        /* dry/wet blend — mix==0 is bit-exact passthrough */
+        cc_out_l[i] = l * (1.0f - mix) + wet_l * mix;
+        cc_out_r[i] = r * (1.0f - mix) + wet_r * mix;
     }
 }
 
