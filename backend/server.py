@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import functools
 import logging
+import os
 
 import torch
 import websockets
@@ -29,7 +30,7 @@ from websocket_handler import handle_client
 logging.getLogger("websockets").setLevel(logging.ERROR)
 
 
-async def main(port, device, auth_token=None):
+async def main(port, device, auth_token=None, num_workers=4):
     manager = ModelManager(device=device)
 
     available = manager.get_available_models()
@@ -44,9 +45,14 @@ async def main(port, device, auth_token=None):
     else:
         print("Authentication disabled (no --auth-token provided)")
 
-    print(f"\nStarting WebSocket server on ws://localhost:{port}")
+    print(f"\nStarting WebSocket server on ws://localhost:{port} (workers={num_workers})")
     async with websockets.serve(
-        functools.partial(handle_client, manager=manager, auth_token=auth_token),
+        functools.partial(
+            handle_client,
+            manager=manager,
+            auth_token=auth_token,
+            num_workers=num_workers,
+        ),
         "localhost", port,
         logger=logging.getLogger("websockets"),
         max_size=10 * 1024 * 1024,  # 10MB — audio chunks can be ~2MB for 5s stereo
@@ -61,9 +67,15 @@ if __name__ == "__main__":
                         help="Device: cpu, cuda, or auto")
     parser.add_argument("--auth-token", type=str, default=None,
                         help="Require clients to authenticate with this token")
+    parser.add_argument("--workers", type=int,
+                        default=int(os.environ.get("KARAFILT_WORKERS", "4")),
+                        help="Per-session AI worker pool size (env: KARAFILT_WORKERS, default 4)")
     args = parser.parse_args()
 
     if args.device == "auto":
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    asyncio.run(main(args.port, args.device, args.auth_token))
+    if args.workers < 1:
+        args.workers = 1
+
+    asyncio.run(main(args.port, args.device, args.auth_token, args.workers))

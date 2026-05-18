@@ -102,9 +102,12 @@ Options:
 --port 9876           # WebSocket port (default: 9876)
 --device auto         # cpu, cuda, or auto (default: auto)
 --auth-token SECRET   # require clients to authenticate
+--workers 4           # per-session AI worker pool size (default 4, env: KARAFILT_WORKERS)
 ```
 
 The server auto-detects GPU (CUDA) and falls back to CPU. First run downloads the Demucs model (~1.5GB).
+
+Each session spawns `--workers` concurrent Demucs inferences fed from a per-session queue; results are reordered before being sent back. On a single GPU, CUDA serializes compute so the throughput speedup vs. 1 worker is bounded by CPU prep overlap — lower `--workers` if VRAM is tight (each in-flight chunk uses ~1 GB on top of model weights).
 
 ### Supported AI Models
 
