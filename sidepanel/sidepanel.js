@@ -363,6 +363,30 @@ function renderIncremental() {
   lastRenderedCount = parsedLines.length;
 }
 
+let scrollAnimRAF = null;
+function smoothScrollLines(targetTop, duration = 600) {
+  if (scrollAnimRAF) cancelAnimationFrame(scrollAnimRAF);
+  const startTop = linesEl.scrollTop;
+  const distance = targetTop - startTop;
+  if (Math.abs(distance) < 1) {
+    linesEl.scrollTop = targetTop;
+    return;
+  }
+  const startTime = performance.now();
+  // ease-in-out quadratic — symmetric: gentle start, gentle settle
+  const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+  function step(now) {
+    const t = Math.min(1, (now - startTime) / duration);
+    linesEl.scrollTop = startTop + distance * ease(t);
+    if (t < 1) {
+      scrollAnimRAF = requestAnimationFrame(step);
+    } else {
+      scrollAnimRAF = null;
+    }
+  }
+  scrollAnimRAF = requestAnimationFrame(step);
+}
+
 function highlightLine(index) {
   if (index === currentLineIndex) return;
   const prev = linesEl.querySelector(".line.active");
@@ -374,7 +398,7 @@ function highlightLine(index) {
     // Manually center the active line inside .lines (scrollIntoView can affect
     // ancestors and behaves unpredictably with rapid updates).
     const target = next.offsetTop + next.offsetHeight / 2 - linesEl.clientHeight / 2;
-    linesEl.scrollTo({ top: target, behavior: "smooth" });
+    smoothScrollLines(target);
   } else {
     console.warn("[KFL-Sidepanel] could not find line element for index", index);
   }
