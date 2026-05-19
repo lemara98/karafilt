@@ -4,7 +4,7 @@ let sourceNode = null;
 let mediaStream = null;
 let ws = null;
 let currentMode = "stft";
-let currentAIModel = "mdx_extra_q";
+let currentAIModel = "htdemucs";
 let captureReady = false;
 let serverUrl = "ws://localhost:9876";
 let apiKey = "";
@@ -32,11 +32,13 @@ function sendAIStatus(status, detail) {
 // Server settings are pushed in from the service worker (offscreen
 // docs can't access chrome.storage directly — only chrome.runtime).
 
-// AI mode state. Chunk sizing trades steady-state latency for Demucs quality:
-// shorter chunks → smaller lag, but Demucs sees less context per inference
-// (its internal SEGMENT_SECONDS is 3.0, so 2s inputs run as a single segment).
-const AI_CHUNK_SECONDS = 2;
-const AI_OVERLAP_SECONDS = 0.5; // overlap between consecutive chunks (~25% of chunk)
+// AI mode state. Chunk size kept at 5s because Demucs's hybrid transformer
+// produces noticeably better separation with that much surrounding context;
+// shorter chunks (we tried 2s) audibly degrade vocal isolation. Prebuffer
+// stays at 1 chunk so the AI starts crossfading in sooner — worker pool
+// keeps the queue from emptying in steady state.
+const AI_CHUNK_SECONDS = 5;
+const AI_OVERLAP_SECONDS = 1;   // overlap between consecutive chunks
 const AI_PREBUFFER_CHUNKS = 1;  // wait for 1 chunk before crossfading to AI
 let aiRecordBuffers = [[], []];
 let aiRecordedSamples = 0;
@@ -109,6 +111,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.serverUrl) serverUrl = message.serverUrl;
       if (typeof message.apiKey === "string") apiKey = message.apiKey;
       startCapture(message.streamId, message.mode || "stft");
+      break;
+    case "START_VIA_DISPLAY_MEDIA":
+      console.log("[OFFSCREEN] START_VIA_DISPLAY_MEDIA received, mode:", message.mode);
+      if (message.aiModel) currentAIModel = message.aiModel;
+      if (message.serverUrl) serverUrl = message.serverUrl;
+      if (typeof message.apiKey === "string") apiKey = message.apiKey;
+      startCaptureViaDisplayMedia(message.mode || "stft");
       break;
     case "STOP_CAPTURE":
       console.log("[OFFSCREEN] STOP_CAPTURE received");
@@ -361,12 +370,79 @@ function notifyAlignResult({ songKey, ok, lines, error }) {
   }).catch(() => {});
 }
 
+// Set up the AudioContext + worklet + AI tap from a MediaStream that's
+// already been acquired. Used by both the tabCapture path (Chrome-friendly,
+// no picker) and the getDisplayMedia path (cross-browser, shows the system
+// picker). Caller is responsible for cleanupAudio() before invoking.
+async function startCaptureFromMediaStream(stream, initialMode) {
+  mediaStream = stream;
+
+  audioContext = new AudioContext();
+  // Ensure context is running (Brave may start it suspended)
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
+
+  const wasmUrl = chrome.runtime.getURL("wasm/build/vocal_remove.wasm");
+  const wasmResponse = await fetch(wasmUrl);
+  const wasmBytes = await wasmResponse.arrayBuffer();
+  const wasmModule = await WebAssembly.compile(wasmBytes);
+
+  const workletUrl = chrome.runtime.getURL("worklet-processor.js");
+  await audioContext.audioWorklet.addModule(workletUrl);
+
+  workletNode = new AudioWorkletNode(
+    audioContext,
+    "vocal-remove-processor",
+    {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      processorOptions: {
+        wasmModule: wasmModule,
+        sampleRate: audioContext.sampleRate,
+      },
+    }
+  );
+
+  sourceNode = audioContext.createMediaStreamSource(mediaStream);
+
+  // Gain nodes for crossfading between worklet output and AI output
+  workletGainNode = audioContext.createGain();
+  workletGainNode.gain.value = 1.0;
+  aiOutputGainNode = audioContext.createGain();
+  aiOutputGainNode.gain.value = 0.0;
+
+  // Audio graph:
+  //   source → worklet → workletGain → destination
+  //   source → aiBufferNode → (silent, just for capturing PCM)
+  //   AI playback → aiOutputGain → destination
+  sourceNode.connect(workletNode);
+  workletNode.connect(workletGainNode);
+  workletGainNode.connect(audioContext.destination);
+  aiOutputGainNode.connect(audioContext.destination);
+
+  // AI capture tap (always connected, only records when in AI mode)
+  aiBufferNode = audioContext.createScriptProcessor(4096, 2, 2);
+  aiBufferNode.onaudioprocess = onAIAudioProcess;
+  aiGainNode = audioContext.createGain();
+  aiGainNode.gain.value = 0;
+  sourceNode.connect(aiBufferNode);
+  aiBufferNode.connect(aiGainNode);
+  aiGainNode.connect(audioContext.destination);
+
+  captureReady = true;
+  console.log(`[OFFSCREEN] capture started, sample rate: ${audioContext.sampleRate}, about to switchMode("${initialMode}")`);
+
+  switchMode(initialMode);
+  console.log(`[OFFSCREEN] switchMode complete, ws=${ws ? ws.readyState : "null"}, currentMode=${currentMode}`);
+}
+
 async function startCapture(streamId, initialMode) {
   console.log(`[OFFSCREEN] startCapture called, mode=${initialMode}, streamId=${streamId}`);
   try {
     cleanupAudio();
-
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: "tab",
@@ -374,68 +450,45 @@ async function startCapture(streamId, initialMode) {
         },
       },
     });
-
-    audioContext = new AudioContext();
-    // Ensure context is running (Brave may start it suspended)
-    if (audioContext.state === "suspended") {
-      await audioContext.resume();
-    }
-
-    const wasmUrl = chrome.runtime.getURL("wasm/build/vocal_remove.wasm");
-    const wasmResponse = await fetch(wasmUrl);
-    const wasmBytes = await wasmResponse.arrayBuffer();
-    const wasmModule = await WebAssembly.compile(wasmBytes);
-
-    const workletUrl = chrome.runtime.getURL("worklet-processor.js");
-    await audioContext.audioWorklet.addModule(workletUrl);
-
-    workletNode = new AudioWorkletNode(
-      audioContext,
-      "vocal-remove-processor",
-      {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [2],
-        processorOptions: {
-          wasmModule: wasmModule,
-          sampleRate: audioContext.sampleRate,
-        },
-      }
-    );
-
-    sourceNode = audioContext.createMediaStreamSource(mediaStream);
-
-    // Gain nodes for crossfading between worklet output and AI output
-    workletGainNode = audioContext.createGain();
-    workletGainNode.gain.value = 1.0;
-    aiOutputGainNode = audioContext.createGain();
-    aiOutputGainNode.gain.value = 0.0;
-
-    // Audio graph:
-    //   source → worklet → workletGain → destination
-    //   source → aiBufferNode → (silent, just for capturing PCM)
-    //   AI playback → aiOutputGain → destination
-    sourceNode.connect(workletNode);
-    workletNode.connect(workletGainNode);
-    workletGainNode.connect(audioContext.destination);
-    aiOutputGainNode.connect(audioContext.destination);
-
-    // AI capture tap (always connected, only records when in AI mode)
-    aiBufferNode = audioContext.createScriptProcessor(4096, 2, 2);
-    aiBufferNode.onaudioprocess = onAIAudioProcess;
-    aiGainNode = audioContext.createGain();
-    aiGainNode.gain.value = 0;
-    sourceNode.connect(aiBufferNode);
-    aiBufferNode.connect(aiGainNode);
-    aiGainNode.connect(audioContext.destination);
-
-    captureReady = true;
-    console.log(`[OFFSCREEN] capture started, sample rate: ${audioContext.sampleRate}, about to switchMode("${initialMode}")`);
-
-    switchMode(initialMode);
-    console.log(`[OFFSCREEN] switchMode complete, ws=${ws ? ws.readyState : "null"}, currentMode=${currentMode}`);
+    await startCaptureFromMediaStream(stream, initialMode);
   } catch (err) {
     console.error("[OFFSCREEN] failed to start capture", err);
+  }
+}
+
+// Cross-browser capture path: instead of tabCapture's getMediaStreamId
+// (which Brave rejects when triggered from a side-panel button click),
+// invoke the Web standard getDisplayMedia. Brave/Chrome/Edge all show a
+// "Choose what to share" picker; the user selects the tab and checks
+// "Share audio". User gesture must be active in this document (we rely on
+// the offscreen being created with reasons including DISPLAY_MEDIA, and on
+// the side-panel button click that initiated this flow being recent
+// enough to satisfy the transient-activation check).
+async function startCaptureViaDisplayMedia(initialMode) {
+  console.log(`[OFFSCREEN] startCaptureViaDisplayMedia called, mode=${initialMode}`);
+  try {
+    cleanupAudio();
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      // suppressLocalAudioPlayback mutes the captured tab in the user's
+      // speakers — without this, getDisplayMedia is just a tap and the
+      // original (with vocals) keeps playing alongside our processed output.
+      // Constraint supported in Chrome/Brave 109+.
+      audio: { suppressLocalAudioPlayback: true },
+      video: true, // required by spec; we drop it immediately
+    });
+    // Drop the video track — we only need audio
+    stream.getVideoTracks().forEach((t) => {
+      try { t.stop(); } catch {}
+    });
+    if (stream.getAudioTracks().length === 0) {
+      console.warn("[OFFSCREEN] getDisplayMedia returned no audio track — user didn't check 'Share audio'");
+      sendAIStatus("error", { reason: "no-audio-track" });
+      return;
+    }
+    await startCaptureFromMediaStream(stream, initialMode);
+  } catch (err) {
+    console.error("[OFFSCREEN] startCaptureViaDisplayMedia failed:", err && err.message);
+    sendAIStatus("error", { reason: err && err.name === "NotAllowedError" ? "user-cancelled" : "display-media-failed" });
   }
 }
 

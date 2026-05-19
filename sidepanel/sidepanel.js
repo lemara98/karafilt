@@ -53,6 +53,13 @@ let lastPlaybackTime = 0;
 let aiLagSeconds = 0;
 let lastRenderedCount = 0;
 let lastRenderedMode = null;  // "synced" | "plain" | null
+// Karaoke (focus) view: shows only the active line plus its immediate
+// neighbors instead of the full scrolling list. Toggled from the header.
+let karaokeMode = false;
+// Song duration reported by the content script alongside currentTime. Used
+// for the linear scroll on plain (unsynced) lyrics — 0 means unknown
+// (e.g. live streams), in which case the auto-scroll is skipped.
+let lastPlaybackDuration = 0;
 // Full set of matches the LRCLib lookup returned — primary at index 0
 // followed by the alternatives. Each entry: {trackName, artistName, source,
 // syncedLyrics?, syncedLines?, plainLyrics?}. currentMatchIdx points at the
@@ -203,6 +210,9 @@ function switchToMatch(index) {
   setSourceBadge(sourceLabel);
   setStatus("");
   renderMatchesPicker();
+  // Collapse the alternatives dropdown after a manual pick — the user just
+  // resolved the picker, so leaving it open obscures the lyrics they wanted.
+  if (altsBarEl) altsBarEl.classList.remove("open");
   if (parsedLines.length > 0 && lastPlaybackTime > 0) {
     syncToPlaybackTime(lastPlaybackTime);
   }
@@ -348,9 +358,19 @@ function renderLines(mode) {
   });
   lastRenderedCount = parsedLines.length;
 
+  // The freshly-rendered lines don't yet carry the focus-page class.
+  // Reset the page tracker so the next applyKaraokePage call always re-marks
+  // the visible page (its early-bail would otherwise leave the lines blank).
+  karaokeCurrentPage = -1;
   // Immediately apply highlight if we have a known playback time — avoids
   // a flash of unhighlighted state while waiting for the next PLAYBACK_TIME.
-  if (lastPlaybackTime > 0) syncToPlaybackTime(lastPlaybackTime);
+  if (lastPlaybackTime > 0) {
+    syncToPlaybackTime(lastPlaybackTime);
+  } else if (karaokeMode) {
+    // No playback time yet — show the first page so focus mode isn't blank
+    // while waiting for the song to start.
+    applyKaraokePage(-1);
+  }
   updateLoaderVisibility();
 }
 
@@ -361,6 +381,12 @@ function renderIncremental() {
     linesEl.appendChild(makeLineEl(parsedLines[i], i));
   }
   lastRenderedCount = parsedLines.length;
+  // Newly-appended lines don't have the focus-page class; reapply so they
+  // join the visible page if they fall within it.
+  if (karaokeMode) {
+    karaokeCurrentPage = -1;
+    applyKaraokePage(currentLineIndex);
+  }
 }
 
 let scrollAnimRAF = null;
@@ -387,6 +413,26 @@ function smoothScrollLines(targetTop, duration = 600) {
   scrollAnimRAF = requestAnimationFrame(step);
 }
 
+// Karaoke (focus) mode shows lyrics in pages of KARAOKE_PAGE_SIZE lines. The
+// visible page only swaps when the active line crosses a page boundary, so
+// each page stays on screen long enough to read.
+const KARAOKE_PAGE_SIZE = 3;
+let karaokeCurrentPage = -1;
+
+function applyKaraokePage(index) {
+  if (!linesEl) return;
+  const safeIndex = index < 0 ? 0 : index;
+  const page = Math.floor(safeIndex / KARAOKE_PAGE_SIZE);
+  if (page === karaokeCurrentPage) return;
+  karaokeCurrentPage = page;
+  const pageStart = page * KARAOKE_PAGE_SIZE;
+  const pageEnd = pageStart + KARAOKE_PAGE_SIZE;
+  for (const el of linesEl.querySelectorAll(".line")) {
+    const i = parseInt(el.dataset.index, 10);
+    el.classList.toggle("kc-page-current", i >= pageStart && i < pageEnd);
+  }
+}
+
 function highlightLine(index) {
   if (index === currentLineIndex) return;
   const prev = linesEl.querySelector(".line.active");
@@ -395,20 +441,38 @@ function highlightLine(index) {
   if (next) {
     next.classList.add("active");
     console.log("[KFL-Sidepanel] active line set to", index, "→", next.textContent.slice(0, 60));
-    // Manually center the active line inside .lines (scrollIntoView can affect
-    // ancestors and behaves unpredictably with rapid updates).
-    const target = next.offsetTop + next.offsetHeight / 2 - linesEl.clientHeight / 2;
-    smoothScrollLines(target);
+    if (karaokeMode) {
+      // Karaoke mode: swap the visible 3-line page only at boundaries.
+      applyKaraokePage(index);
+    } else {
+      // List mode: smooth-scroll the active line to vertical center.
+      const target = next.offsetTop + next.offsetHeight / 2 - linesEl.clientHeight / 2;
+      smoothScrollLines(target);
+    }
   } else {
     console.warn("[KFL-Sidepanel] could not find line element for index", index);
   }
   currentLineIndex = index;
 }
 
+// Plain-text lyrics have no timing info, so fall back to a linear scroll:
+// scrollFraction = currentTime / duration. Drifts when intros/breaks are
+// long, but at least the lyrics move in roughly the right direction. Skipped
+// when duration is unknown (live streams, ads). Sync toggle controls this
+// via the playback-ticker — when Sync is off, PLAYBACK_TIME stops flowing
+// and the user can scroll freely.
+function autoScrollPlainLyrics(t) {
+  if (!plainLyrics || lastPlaybackDuration <= 0) return;
+  const maxScroll = linesEl.scrollHeight - linesEl.clientHeight;
+  if (maxScroll <= 0) return;
+  const fraction = Math.min(1, Math.max(0, t / lastPlaybackDuration));
+  linesEl.scrollTop = fraction * maxScroll;
+}
+
 let syncLogCount = 0;
 function syncToPlaybackTime(t) {
   if (parsedLines.length === 0) {
-    if (syncLogCount++ < 3) console.log("[KFL-Sidepanel] sync skipped — no lines yet");
+    autoScrollPlainLyrics(t);
     return;
   }
   // Shift the highlight back by the AI playback lag so lyrics match the
@@ -488,7 +552,23 @@ async function bindToActiveTab() {
   try {
     await chrome.tabs.sendMessage(tab.id, { type: "REQUEST_LYRICS_STATE" });
   } catch (e) {
-    // Content script not injected on this URL (e.g. chrome:// pages)
+    // Content script wasn't injected — common when the tab was open before
+    // the extension was enabled or reloaded. Try to inject it on demand,
+    // then retry the message.
+    if (tab.url && /^https?:/.test(tab.url)) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ["content/lyrics-overlay.js"],
+        });
+        // Give the script a moment to set up its listener before retrying.
+        await new Promise((r) => setTimeout(r, 200));
+        await chrome.tabs.sendMessage(tab.id, { type: "REQUEST_LYRICS_STATE" });
+        return;
+      } catch (injectErr) {
+        console.warn("[KFL-Sidepanel] on-demand inject failed:", injectErr);
+      }
+    }
     resetDisplay("No media on this tab");
   }
 }
@@ -581,6 +661,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }
   } else if (message.type === "PLAYBACK_TIME") {
     lastPlaybackTime = message.time;
+    if (typeof message.duration === "number") {
+      lastPlaybackDuration = message.duration;
+    }
     syncToPlaybackTime(message.time);
   }
 });
@@ -653,6 +736,47 @@ if (highlightToggle) {
 
   highlightToggle.addEventListener("change", () => {
     setShowLyrics(highlightToggle.checked, true);
+  });
+}
+
+// --- Karaoke (focus) toggle ───────────────────────────────────────────────
+// Hides everything except the current line and its immediate neighbors so the
+// side panel reads like a karaoke machine instead of a scrolling lyrics list.
+const karaokeToggle = document.getElementById("karaoke-toggle");
+
+function applyKaraokeMode(enabled) {
+  karaokeMode = !!enabled;
+  if (!linesEl) return;
+  linesEl.classList.toggle("karaoke-mode", karaokeMode);
+  if (karaokeMode) {
+    // Initialize the current page based on whatever the active line is.
+    karaokeCurrentPage = -1;
+    applyKaraokePage(currentLineIndex);
+  } else {
+    // Drop all page markers and re-center the active line so the user
+    // doesn't land mid-scroll from the previous karaoke view.
+    karaokeCurrentPage = -1;
+    for (const el of linesEl.querySelectorAll(".line.kc-page-current")) {
+      el.classList.remove("kc-page-current");
+    }
+    if (currentLineIndex >= 0) {
+      const el = linesEl.querySelector(`.line[data-index="${currentLineIndex}"]`);
+      if (el) {
+        const target = el.offsetTop + el.offsetHeight / 2 - linesEl.clientHeight / 2;
+        smoothScrollLines(target);
+      }
+    }
+  }
+}
+
+if (karaokeToggle) {
+  chrome.storage.local.get({ karaokeMode: false }, ({ karaokeMode: stored }) => {
+    karaokeToggle.checked = !!stored;
+    applyKaraokeMode(!!stored);
+  });
+  karaokeToggle.addEventListener("change", () => {
+    chrome.storage.local.set({ karaokeMode: karaokeToggle.checked });
+    applyKaraokeMode(karaokeToggle.checked);
   });
 }
 

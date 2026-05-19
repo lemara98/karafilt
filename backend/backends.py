@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import threading
 
 import numpy as np
 import torch
@@ -29,9 +30,28 @@ class DemucsBackend:
     def __init__(self, device):
         self.device = torch.device(device)
         self.models = {}  # lazy cache: model_name -> loaded model
+        # Serializes the lazy first-load so concurrent workers don't all
+        # allocate a fresh copy of the model on the GPU (which exhausts VRAM
+        # and triggers CPU fallback for everyone).
+        self._load_lock = threading.Lock()
+        # Serializes GPU inference (apply_model) across workers. CUDA already
+        # serializes ops on the default stream, so parallel apply_model calls
+        # don't speed up — they only multiply working memory and cause OOM.
+        # Workers still run CPU prep/post in parallel; the GPU work itself
+        # is one-at-a-time.
+        self._inference_lock = threading.Lock()
 
     def _get_model(self, model_name):
-        if model_name not in self.models:
+        # Fast path: model already cached.
+        cached = self.models.get(model_name)
+        if cached is not None:
+            return cached
+        # Slow path: acquire the lock and double-check, then load. Only one
+        # thread does the GPU allocation; the others just wait and reuse.
+        with self._load_lock:
+            cached = self.models.get(model_name)
+            if cached is not None:
+                return cached
             print(f"Loading Demucs model '{model_name}' on {self.device}...")
             model = get_model(model_name)
             try:
@@ -45,7 +65,7 @@ class DemucsBackend:
             model.eval()
             self.models[model_name] = model
             print(f"  Loaded. Sample rate: {model.samplerate} Hz, sources: {model.sources}")
-        return self.models[model_name]
+            return model
 
     def _fall_back_to_cpu(self):
         """Move all loaded models to CPU after a GPU OOM. Persists for the session."""
@@ -60,17 +80,18 @@ class DemucsBackend:
         """Run apply_model with smaller segments and automatic CPU fallback on OOM."""
         kwargs = dict(progress=False, overlap=0.25, shifts=1,
                       split=True, segment=self.SEGMENT_SECONDS)
-        try:
-            with torch.no_grad():
-                return apply_model(model, audio, **kwargs)
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            self._fall_back_to_cpu()
-            audio = audio.to(self.device)
-            with torch.no_grad():
-                return apply_model(model, audio, **kwargs)
+        with self._inference_lock:
+            try:
+                with torch.no_grad():
+                    return apply_model(model, audio, **kwargs)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                self._fall_back_to_cpu()
+                audio = audio.to(self.device)
+                with torch.no_grad():
+                    return apply_model(model, audio, **kwargs)
 
-    def process(self, pcm_float32, input_sr, model_name="mdx_extra_q", two_pass=False):
+    def process(self, pcm_float32, input_sr, model_name="htdemucs", two_pass=False):
         model = self._get_model(model_name)
         sr = model.samplerate
 
@@ -216,5 +237,5 @@ class ModelManager:
         elif HAS_AUDIO_SEPARATOR and model_name in SEPARATOR_MODELS:
             return self.audio_sep.process(pcm_float32, input_sr, model_name, two_pass)
         else:
-            print(f"Unknown model '{model_name}', falling back to mdx_extra_q")
-            return self.demucs.process(pcm_float32, input_sr, "mdx_extra_q", two_pass)
+            print(f"Unknown model '{model_name}', falling back to htdemucs")
+            return self.demucs.process(pcm_float32, input_sr, "htdemucs", two_pass)

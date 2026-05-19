@@ -9,12 +9,14 @@ except ImportError:
 
 
 # Registry of available models with display info. Order matters: the first
-# entry is the default low-latency choice and appears first in the picker.
+# entry is the default and appears first in the picker. htdemucs is the
+# quality sweet spot — fast enough for our worker pool to keep up and
+# produces noticeably cleaner separation than the quantized variants.
 DEMUCS_MODELS = {
-    "mdx_extra_q":  "MDX-Net Extra Quantized (low-latency default)",
-    "htdemucs":     "Demucs Hybrid Transformer (balanced)",
-    "mdx_extra":    "MDX-Net Extra",
+    "htdemucs":     "Demucs Hybrid Transformer (default)",
     "htdemucs_ft":  "Demucs Fine-Tuned (highest quality, slow, high VRAM)",
+    "mdx_extra":    "MDX-Net Extra",
+    "mdx_extra_q":  "MDX-Net Extra Quantized (fastest, lower quality)",
 }
 
 # audio-separator models (only if package is installed)

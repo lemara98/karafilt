@@ -4,9 +4,86 @@ let capturedTabId = null;
 let capturedTabUrl = null;
 let currentAIStatus = { status: "idle", detail: null };
 
+// Icon click opens the side panel only — it does NOT auto-start capture.
+// Starting capture requires an explicit user action (Start button in Chrome,
+// or the Ctrl+Shift+K shortcut in any Chromium browser).
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((err) => console.error("[SW] setPanelBehavior failed:", err));
+
+// Toggle capture for a tab: stop if it's the currently-captured tab,
+// otherwise start a fresh capture. Called from chrome.commands.onCommand
+// (keyboard shortcut). Must be invoked synchronously inside an invocation
+// event handler — the chrome.tabCapture.getMediaStreamId call below relies
+// on the user gesture being fresh, so no awaits before that line.
+function toggleCaptureForTab(tab) {
+  if (!tab || !tab.id || !tab.url || !/^https?:/.test(tab.url)) {
+    console.warn("[SW] toggleCaptureForTab: no eligible tab");
+    return;
+  }
+  if (capturedTabId === tab.id) {
+    capturedTabId = null;
+    capturedTabUrl = null;
+    chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
+    return;
+  }
+  chrome.tabCapture
+    .getMediaStreamId({ targetTabId: tab.id })
+    .then(async (streamId) => {
+      const result = await handleStartCapture(tab.id, undefined, streamId);
+      if (result && result.success) {
+        chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
+      }
+    })
+    .catch((err) => {
+      console.error("[SW] toggleCaptureForTab: tabCapture failed:", err && err.message);
+    });
+}
+
+// Auto-inject the content script into every open http(s) tab on extension
+// load. Manifest V3 content_scripts only run on pages loaded AFTER the
+// extension is enabled — without this, every chrome://extensions reload
+// orphans existing tabs and the user has to refresh them manually before
+// the side panel can find the song. The content script's
+// __karaokeFilterLyricsLoaded guard makes double-injection a no-op.
+async function injectIntoOpenTabs() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (!tab.id || !tab.url || !/^https?:/.test(tab.url)) continue;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ["content/lyrics-overlay.js"],
+        });
+      } catch {
+        // Some URLs reject programmatic injection (e.g. chrome web store).
+        // Silently skip — nothing we can do for those.
+      }
+    }
+  } catch (e) {
+    console.warn("[SW] injectIntoOpenTabs failed:", e);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(injectIntoOpenTabs);
+chrome.runtime.onStartup.addListener(injectIntoOpenTabs);
+
+// Keyboard-shortcut path for Start/Stop Filtering. The chrome.commands API
+// fires onCommand with a fresh, unambiguous "user invocation" context — this
+// works reliably across Chrome, Brave, Edge, etc., where the side-panel
+// button click sometimes doesn't carry through the activeTab grant that
+// chrome.tabCapture.getMediaStreamId requires. We call tabCapture
+// synchronously with the tab provided by the event (no await beforehand)
+// to keep the user gesture intact.
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== "toggle-filter") return;
+  if (tab && tab.id) {
+    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  }
+  toggleCaptureForTab(tab);
+});
 
 // In-memory cache for LRCLib lookups — keeps us from hammering the API
 // on title-watchers that fire multiple times per page.
@@ -170,8 +247,13 @@ function normalizeForMatch(s) {
     // Drop the same metadata noise words cleanTitle strips in bracket/paren
     // form — covers cases where the noise survives cleanTitle (different
     // delimiters, mid-string, or the YouTube metadata path bypasses it).
-    .replace(/\b(hd|hq|4k|1080p?|audio|video|lyrics?|official|live|remaster(?:ed)?|stereo|mono)\b/g, " ")
+    .replace(/\b(hd|hq|4k|1080p?|audio|video|lyrics?|official|live|remaster(?:ed)?|remix|rmx|stereo|mono)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")        // collapse non-alphanumeric to spaces
+    // Some LRCLib entries embed the feature list inside the track name (e.g.
+    // "Hella Décalé (feat. …)") while others strip it. cleanTitle strips it
+    // from the request side; mirror that here so the candidate side matches
+    // regardless of how LRCLib stored it.
+    .replace(/\s(feat|ft)\s.*$/, "")
     .trim();
 }
 
@@ -572,8 +654,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "START_CAPTURE":
       if (message.mode) currentMode = message.mode;
       console.log("[SW] START_CAPTURE mode:", currentMode, "tabId:", message.tabId);
-      handleStartCapture(message.tabId, message.aiModel).then((result) => {
+      handleStartCapture(message.tabId, message.aiModel, message.streamId).then((result) => {
         // Broadcast capture state so popup AND side panel both reflect it.
+        if (result && result.success) {
+          chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
+        }
+        sendResponse(result);
+      });
+      return true; // async response
+
+    case "START_CAPTURE_DISPLAY_MEDIA":
+      if (message.mode) currentMode = message.mode;
+      console.log("[SW] START_CAPTURE_DISPLAY_MEDIA mode:", currentMode, "tabId:", message.tabId);
+      handleStartCaptureViaDisplayMedia(message.tabId, message.aiModel).then((result) => {
         if (result && result.success) {
           chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
         }
@@ -691,7 +784,44 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-async function handleStartCapture(tabId, aiModel) {
+// Cross-browser fallback when the side-panel button can't grant the
+// activeTab gesture tabCapture needs (Brave/Edge/Vivaldi). The offscreen
+// document calls navigator.mediaDevices.getDisplayMedia() instead, which
+// shows the browser's "Choose what to share" picker. The user selects the
+// tab, checks "Share audio", and capture proceeds through the same
+// post-stream pipeline as the tabCapture path.
+async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
+  try {
+    if (capturedTabId !== null) {
+      capturedTabId = null;
+      capturedTabUrl = null;
+      chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const tab = await chrome.tabs.get(tabId);
+    await ensureOffscreenDocument();
+    const settings = await chrome.storage.local.get({
+      serverUrl: "ws://localhost:9876",
+      apiKey: "",
+    });
+    capturedTabId = tabId;
+    capturedTabUrl = tab.url;
+    console.log("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode, "aiModel:", aiModel);
+    chrome.runtime.sendMessage({
+      type: "START_VIA_DISPLAY_MEDIA",
+      mode: currentMode,
+      aiModel: aiModel,
+      serverUrl: settings.serverUrl,
+      apiKey: settings.apiKey,
+    });
+    return { success: true };
+  } catch (err) {
+    console.error("[SW] handleStartCaptureViaDisplayMedia failed:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+async function handleStartCapture(tabId, aiModel, providedStreamId) {
   try {
     // Stop any existing capture first
     if (capturedTabId !== null) {
@@ -714,10 +844,15 @@ async function handleStartCapture(tabId, aiModel) {
       apiKey: "",
     });
 
-    const streamId = await chrome.tabCapture.getMediaStreamId({
+    // Prefer the streamId captured by the side panel/popup click handler —
+    // that path keeps the activeTab user gesture intact. Fall back to
+    // fetching one here for legacy callers; that path will fail with
+    // "Extension has not been invoked for the current page" if the user
+    // hasn't re-invoked the extension on this tab recently.
+    const streamId = providedStreamId || await chrome.tabCapture.getMediaStreamId({
       targetTabId: tabId,
     });
-    console.log("[SW] got stream ID:", streamId);
+    console.log("[SW] got stream ID:", streamId, providedStreamId ? "(from caller)" : "(fetched in SW)");
 
     // Send stream ID along with current mode so it's applied after capture starts
     capturedTabId = tabId;
@@ -764,7 +899,10 @@ async function ensureOffscreenDocument() {
   try {
     creatingOffscreen = chrome.offscreen.createDocument({
       url: "offscreen.html",
-      reasons: ["USER_MEDIA"],
+      // DISPLAY_MEDIA is needed for the cross-browser fallback path
+      // (offscreen calls navigator.mediaDevices.getDisplayMedia). USER_MEDIA
+      // covers the Chrome-friendly tabCapture path that uses getUserMedia.
+      reasons: ["USER_MEDIA", "DISPLAY_MEDIA"],
       justification: "Capture tab audio for real-time vocal removal processing",
     });
     await creatingOffscreen;

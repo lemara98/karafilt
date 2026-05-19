@@ -11,22 +11,10 @@
   <div class="container">
     <header>
       <div class="logo">
-        <svg width="22" height="22" viewBox="0 0 64 64" fill="none">
-          <rect x="22" y="8" width="20" height="32" rx="10" fill="url(#mic-grad)" stroke="#fff" stroke-width="2" stroke-opacity="0.3"/>
-          <line x1="32" y1="44" x2="32" y2="52" stroke="url(#mic-grad)" stroke-width="3" stroke-linecap="round"/>
-          <line x1="24" y1="52" x2="40" y2="52" stroke="url(#mic-grad)" stroke-width="3" stroke-linecap="round"/>
-          <path d="M18 32 C18 42, 46 42, 46 32" stroke="url(#mic-grad)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-          <defs>
-            <linearGradient id="mic-grad" x1="32" y1="8" x2="32" y2="52" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#60a5fa"/>
-              <stop offset="100%" stop-color="#c084fc"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        <div>
-          <h1>Karafilt</h1>
-          <p class="song-title" id="song-title">—</p>
-        </div>
+        <a href="https://karafilt.com" target="_blank" rel="noopener noreferrer" class="wordmark-link" title="Visit karafilt.com">
+          <img src="../icons/wordmark.svg" alt="Karafilt" class="wordmark">
+        </a>
+        <p class="song-title" id="song-title">—</p>
       </div>
       <div class="header-right">
         <div class="header-right-row">
@@ -38,10 +26,17 @@
             </svg>
           </button>
         </div>
-        <label class="highlight-toggle-wrap" title="Toggle active-line highlighting">
-          <span class="highlight-toggle-label">Highlight</span>
+        <label class="highlight-toggle-wrap" title="Sync: keep the active-line, scroll, and word highlight in step with the song. Turn off to scroll/read manually.">
+          <span class="highlight-toggle-label">Sync</span>
           <span class="switch">
             <input type="checkbox" id="highlight-toggle" checked>
+            <span class="switch-slider"></span>
+          </span>
+        </label>
+        <label class="highlight-toggle-wrap" title="Focus mode: show three lines at a time and swap when the active line finishes the page">
+          <span class="highlight-toggle-label">Focus</span>
+          <span class="switch">
+            <input type="checkbox" id="karaoke-toggle">
             <span class="switch-slider"></span>
           </span>
         </label>
@@ -124,7 +119,7 @@
         </div>
         <div class="select-wrap">
           <select id="sp-ai-model">
-            <option value="mdx_extra_q">MDX-Net Extra Quantized (low-latency default)</option>
+            <option value="htdemucs">Demucs Hybrid Transformer (default)</option>
           </select>
           <svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
         </div>

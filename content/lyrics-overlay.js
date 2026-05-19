@@ -56,8 +56,20 @@
     /\s*\[4k\]/i,
     /\s*\(1080p?\)/i,
     /\s*\[1080p?\]/i,
+    // Album-format markers commonly added to YouTube uploads
+    /\s*\(cd\)/i, /\s*\[cd\]/i,
+    /\s*\(lp\)/i, /\s*\[lp\]/i,
+    /\s*\(ep\)/i, /\s*\[ep\]/i,
+    /\s*\(album\)/i, /\s*\[album\]/i,
+    /\s*\(single\)/i, /\s*\[single\]/i,
     /\s*\(remaster(ed)?[^)]*\)/i,
     /\s*\[remaster(ed)?[^\]]*\]/i,
+    // "remix" / "rmx" can appear anywhere inside the parens or brackets
+    // (e.g. "(Extended Remix)", "[Acoustic Remix]", "(RMX 2020)").
+    /\s*\([^)]*\bremix\b[^)]*\)/i,
+    /\s*\[[^\]]*\bremix\b[^\]]*\]/i,
+    /\s*\([^)]*\brmx\b[^)]*\)/i,
+    /\s*\[[^\]]*\brmx\b[^\]]*\]/i,
     /\s*\(live[^)]*\)/i,
     /\s*\[live[^\]]*\]/i,
     /\s*\(feat\.?[^)]*\)/i,
@@ -278,6 +290,31 @@
       const [song, artist] = title.split(" · ");
       candidates.push(...expandArtists(artist.trim(), song.trim()));
       return dedupCandidates(candidates);
+    }
+
+    // Pipe-separated "Artist | Track | OFFICIAL MUSIC VIDEO" — common on
+    // some music channels (e.g. JELENA KARLEUSA, balkan music uploads).
+    // Filter out segments that are only noise words so the "OFFICIAL …"
+    // trailing tag doesn't pollute the candidate list.
+    if (title.includes(" | ")) {
+      const looksLikeNoise = (s) =>
+        /^(?:\s*(?:official|music|video|audio|hd|hq|4k|1080p?|lyrics?))+\s*$/i.test(s);
+      // Strip a leading "NN " / "NN. " / "NN - " track number — common when
+      // a pipe-separated title comes from an album track listing.
+      const stripTrackNumber = (s) => s.replace(/^\d{1,2}[\s.\-]+/, "");
+      const parts = title
+        .split(/\s*\|\s*/)
+        .map((s) => stripTrackNumber(s.trim()))
+        .filter((s) => s && !looksLikeNoise(s));
+      if (parts.length >= 2) {
+        candidates.push(...expandArtists(parts[0], parts[1]));
+        candidates.push(...expandArtists(parts[1], parts[0]));
+        candidates.push({ artist: "", track: parts[0] });
+        candidates.push({ artist: "", track: parts[1] });
+        return dedupCandidates(candidates);
+      }
+      // Only one meaningful part survived — fall through to dash logic
+      // (in case the surviving part still has an "Artist - Track" pattern).
     }
 
     // YouTube-style "Artist - Track" (or any dash variant)
@@ -614,6 +651,7 @@
     safeSendMessage({
       type: "PLAYBACK_TIME",
       time: media.currentTime,
+      duration: isFinite(media.duration) ? media.duration : 0,
       paused: media.paused,
     });
   }

@@ -112,10 +112,10 @@ Each session spawns `--workers` concurrent Demucs inferences fed from a per-sess
 ### Supported AI Models
 
 **Demucs** (built-in):
-- `mdx_extra_q` — MDX quantized (default, low-latency)
-- `htdemucs` — Hybrid Transformer (balanced)
-- `mdx_extra` — MDX variant
+- `htdemucs` — Hybrid Transformer (default, quality sweet spot)
 - `htdemucs_ft` — Fine-tuned (highest quality, slow, high VRAM)
+- `mdx_extra` — MDX variant
+- `mdx_extra_q` — MDX quantized (fastest, lower quality)
 
 **Audio Separator** (optional, install separately):
 - BS-Roformer, Mel-Roformer, MDX23C, UVR-MDX-NET

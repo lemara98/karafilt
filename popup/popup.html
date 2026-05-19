@@ -10,25 +10,8 @@
 
     <header>
       <div class="logo">
-        <svg width="28" height="28" viewBox="0 0 64 64" fill="none">
-          <rect x="22" y="8" width="20" height="32" rx="10" fill="url(#mic-grad)" stroke="#fff" stroke-width="2" stroke-opacity="0.3"/>
-          <line x1="32" y1="44" x2="32" y2="52" stroke="url(#mic-grad)" stroke-width="3" stroke-linecap="round"/>
-          <line x1="24" y1="52" x2="40" y2="52" stroke="url(#mic-grad)" stroke-width="3" stroke-linecap="round"/>
-          <path d="M18 32 C18 42, 46 42, 46 32" stroke="url(#mic-grad)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-          <!-- sound waves -->
-          <path d="M50 20 C54 24, 54 32, 50 36" stroke="#ff6b9d" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
-          <path d="M54 16 C60 22, 60 34, 54 40" stroke="#c084fc" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.5"/>
-          <defs>
-            <linearGradient id="mic-grad" x1="32" y1="8" x2="32" y2="52" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#60a5fa"/>
-              <stop offset="100%" stop-color="#c084fc"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        <div>
-          <h1>Karafilt</h1>
-          <p class="tagline">Real-time vocal removal</p>
-        </div>
+        <img src="../icons/wordmark.svg" alt="Karafilt" class="wordmark">
+        <p class="tagline">Real-time vocal removal</p>
       </div>
       <div class="status-badge" id="status">
         <span class="status-dot"></span>
@@ -82,7 +65,7 @@
       </div>
       <div class="select-wrap">
         <select id="ai-model">
-          <option value="mdx_extra_q">MDX-Net Extra Quantized (low-latency default)</option>
+          <option value="htdemucs">Demucs Hybrid Transformer (default)</option>
         </select>
         <svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
       </div>

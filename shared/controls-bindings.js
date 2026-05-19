@@ -26,7 +26,7 @@
   const DEFAULTS = {
     mode: "stft",
     mix: 100,
-    aiModel: "mdx_extra_q",
+    aiModel: "htdemucs",
     serverUrl: "ws://localhost:9876",
     apiKey: "",
   };
@@ -44,6 +44,26 @@
 
   window.bindKaraokeControls = function bindKaraokeControls(els) {
     let isActive = false;
+    // Cached active tab id, refreshed on tab activation. Having this
+    // synchronously available lets the click handler call
+    // chrome.tabCapture.getMediaStreamId without any preceding await — Chrome
+    // requires both an unbroken user gesture AND an explicit targetTabId,
+    // so we can't get the id via tabs.query inside the handler (that await
+    // breaks the gesture chain).
+    let cachedTabId = null;
+    async function refreshTabId() {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        cachedTabId = (tab && tab.id) || null;
+      } catch {
+        cachedTabId = null;
+      }
+    }
+    refreshTabId();
+    chrome.tabs.onActivated.addListener(refreshTabId);
+    chrome.tabs.onUpdated.addListener((_id, info) => {
+      if (info.status === "complete") refreshTabId();
+    });
 
     // ── UI helpers ────────────────────────────────────────────────────────
     function updateAIStatus(status, detail) {
@@ -138,15 +158,54 @@
     if (has(els, "toggleBtn")) {
       els.toggleBtn.addEventListener("click", async () => {
         if (!isActive) {
-          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (!tab) {
+          if (!cachedTabId) {
             if (els.statusText) els.statusText.textContent = "No active tab";
             return;
           }
+          // Synchronous call inside the click handler with explicit
+          // targetTabId — preserves both the user gesture and the activeTab
+          // grant Chrome needs to authorize the capture. Capturing the
+          // promise (not awaiting) keeps the gesture intact while we set up
+          // the rest of the request.
+          const streamIdPromise = chrome.tabCapture
+            .getMediaStreamId({ targetTabId: cachedTabId })
+            .catch((err) => err instanceof Error ? err : new Error(String(err)));
+
           if (els.statusText) els.statusText.textContent = "Starting...";
+
+          const streamIdOrErr = await streamIdPromise;
+          if (typeof streamIdOrErr !== "string") {
+            const msg = streamIdOrErr.message || "Capture failed";
+            // Brave/Edge/Vivaldi don't accept side-panel button clicks as a
+            // valid invocation for chrome.tabCapture. Fall back to the
+            // Web-standard getDisplayMedia (a system picker dialog) — works
+            // cross-browser at the cost of one extra click per Start.
+            const isInvocationErr = /not been invoked|activeTab/i.test(msg);
+            if (isInvocationErr) {
+              if (els.statusText) els.statusText.textContent = "Choose the tab to filter...";
+              const response = await chrome.runtime.sendMessage({
+                type: "START_CAPTURE_DISPLAY_MEDIA",
+                tabId: cachedTabId,
+                mode: els.modeSelect ? els.modeSelect.value : DEFAULTS.mode,
+                aiModel: (els.modeSelect && isAIMode(els.modeSelect.value) && els.aiModelSelect)
+                  ? els.aiModelSelect.value
+                  : undefined,
+              });
+              if (response && response.success) {
+                setActiveUI(true);
+              } else if (els.statusText) {
+                els.statusText.textContent = response ? response.error : "Couldn't start capture";
+              }
+              return;
+            }
+            if (els.statusText) els.statusText.textContent = msg;
+            return;
+          }
+
           const response = await chrome.runtime.sendMessage({
             type: "START_CAPTURE",
-            tabId: tab.id,
+            tabId: cachedTabId,
+            streamId: streamIdOrErr,
             mode: els.modeSelect ? els.modeSelect.value : DEFAULTS.mode,
             aiModel: (els.modeSelect && isAIMode(els.modeSelect.value) && els.aiModelSelect)
               ? els.aiModelSelect.value

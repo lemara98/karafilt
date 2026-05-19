@@ -49,25 +49,28 @@ header {
 
 .logo {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: 4px;
   flex: 1;
   min-width: 0;
 }
 
-.logo > div {
-  flex: 1;
-  min-width: 0;
+.wordmark-link {
+  display: inline-block;
+  line-height: 0;
+  transition: opacity 0.15s ease;
 }
 
-h1 {
-  font-size: 13px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #60a5fa, #c084fc, #ff6b9d);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.2px;
+.wordmark-link:hover {
+  opacity: 0.8;
+}
+
+.wordmark {
+  height: 22px;
+  width: auto;
+  display: block;
+  max-width: 100%;
 }
 
 .song-title {
@@ -222,7 +225,10 @@ h1 {
   color: #8b90b0;
   text-align: center;
   opacity: 0.5;
-  transition: opacity 0.35s, color 0.35s, font-size 0.35s, transform 0.35s, background 0.35s;
+  /* Transparent border reserves the 2px space the active marker uses, so
+     the active line doesn't reflow neighbors when it lights up. */
+  border: 2px solid transparent;
+  transition: opacity 0.35s, color 0.35s, background 0.35s, border-color 0.35s, box-shadow 0.35s;
   border-radius: 8px;
   margin: 3px 8px;
   word-break: break-word;
@@ -242,15 +248,13 @@ h1 {
 }
 
 /* Active line: highly visible — bright solid white text, prominent
-   gradient background, glowing border. Designed to pop on dark bg. */
+   gradient background, glowing border. Geometry (font-size, weight, padding,
+   transform) stays identical to inactive lines so the layout doesn't jitter
+   when the active marker moves; visual identity comes purely from color,
+   background, border, and glow. */
 .line.active {
   opacity: 1 !important;
   color: #ffffff !important;
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: 0.2px;
-  transform: scale(1.04);
-  padding: 14px 14px;
   background: linear-gradient(135deg,
     rgba(96, 165, 250, 0.45),
     rgba(192, 132, 252, 0.45),
@@ -289,7 +293,6 @@ h1 {
     0 0 18px rgba(255, 255, 255, 0.95),
     0 0 30px rgba(192, 132, 252, 0.75),
     0 1px 0 rgba(0, 0, 0, 0.5);
-  transform: scale(1.06);
 }
 
 /* Inactive lines: keep text neutral regardless of stale word classes */
@@ -302,7 +305,7 @@ h1 {
 .lines.unsynced .line {
   color: #b0b4d0;
   font-size: 14px;
-  text-align: left;
+  text-align: center;
   opacity: 1;
   padding: 4px 12px;
   margin: 1px 0;
@@ -323,6 +326,41 @@ h1 {
   opacity: 1;
   color: #b0b4d0;
 }
+
+/* ── Karaoke (focus) mode ──
+   Lyrics are batched into pages of 3 lines. JS adds .kc-page-current to the
+   three lines on the active page; the page only swaps when the active line
+   crosses a boundary. Within the page, the active line keeps its prominent
+   styling; the other two are dimmer companions. */
+.lines.karaoke-mode {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0;
+}
+
+.lines.karaoke-mode .line { display: none; }
+
+.lines.karaoke-mode .line.kc-page-current {
+  display: block;
+  /* All three visible lines share one large size so the active marker can
+     move between them without any geometric shift — only color, opacity,
+     and the glow change. */
+  font-size: 22px;
+  padding: 14px 16px;
+  margin: 8px 12px;
+}
+
+.lines.karaoke-mode .line.kc-page-current:not(.active) {
+  opacity: 0.55;
+  color: #b0b4d0;
+}
+
+/* Plain (unsynced) lyrics have no active line to anchor the page —
+   fall back to showing the whole list so the user still gets something. */
+.lines.unsynced.karaoke-mode .line { display: block; }
+.lines.unsynced.karaoke-mode { overflow-y: auto; display: block; padding: 50px 0 80px; }
 
 .lines-empty {
   color: #4b5073;

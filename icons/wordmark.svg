@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 100" font-family="Space Grotesk, sans-serif" font-weight="700">
+  
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8b7cff"></stop>
+      <stop offset="100%" stop-color="#b46cff"></stop>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(0 10)">
+  <rect x="6" y="6" width="10" height="68" rx="2" fill="url(#g)"></rect>
+  <rect x="22" y="32" width="10" height="16" rx="2" fill="url(#g)"></rect>
+  <rect x="34" y="24" width="10" height="32" rx="2" fill="url(#g)"></rect>
+  <rect x="46" y="14" width="10" height="22" rx="2" fill="url(#g)"></rect>
+  <rect x="46" y="44" width="10" height="22" rx="2" fill="url(#g)"></rect>
+  <rect x="58" y="6" width="10" height="20" rx="2" fill="url(#g)"></rect>
+  <rect x="58" y="54" width="10" height="20" rx="2" fill="url(#g)"></rect>
+</g>
+  <text x="98" y="73" font-size="64" letter-spacing="-2.6" fill="#f1efff">karafilt<tspan fill="#b46cff">.</tspan></text>
+</svg>
