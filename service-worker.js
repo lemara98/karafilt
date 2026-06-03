@@ -1,3 +1,9 @@
+// Shared song-matching core (title cleaning, candidate scoring, LRCLib request
+// building). importScripts runs synchronously and populates self.KarafiltSongMatch.
+importScripts("shared/song-match.js");
+const SM = self.KarafiltSongMatch;
+const { normalizeForMatch, levenshtein, fuzzyTrackMatch } = SM;
+
 let offscreenReady = false;
 let currentMode = "stft";
 let capturedTabId = null;
@@ -55,7 +61,7 @@ async function injectIntoOpenTabs() {
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          files: ["content/lyrics-overlay.js"],
+          files: ["shared/song-match.js", "content/lyrics-overlay.js"],
         });
       } catch {
         // Some URLs reject programmatic injection (e.g. chrome web store).
@@ -85,6 +91,38 @@ chrome.commands.onCommand.addListener((command, tab) => {
   toggleCaptureForTab(tab);
 });
 
+// Right-click → "Filter this tab" context menu. A context-menu click grants the
+// activeTab permission that chrome.tabCapture needs, so it captures the current
+// tab directly with NO screen-share picker (unlike a side-panel button click).
+// Mirrors the keyboard-command path: open the side panel, then toggle capture
+// synchronously to keep the user gesture intact for getMediaStreamId.
+const FILTER_TAB_MENU_ID = "karafilt-filter-this-tab";
+
+function setupContextMenu() {
+  try {
+    chrome.contextMenus.removeAll(() => {
+      void chrome.runtime.lastError; // ignore "no menus" on first run
+      chrome.contextMenus.create({
+        id: FILTER_TAB_MENU_ID,
+        title: "Filter this tab with Karafilt",
+        contexts: ["page"],
+        documentUrlPatterns: ["http://*/*", "https://*/*"],
+      }, () => void chrome.runtime.lastError);
+    });
+  } catch (e) {
+    console.warn("[SW] context menu setup failed:", e);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(setupContextMenu);
+chrome.runtime.onStartup.addListener(setupContextMenu);
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== FILTER_TAB_MENU_ID || !tab || !tab.id) return;
+  chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  toggleCaptureForTab(tab);
+});
+
 // In-memory cache for LRCLib lookups — keeps us from hammering the API
 // on title-watchers that fire multiple times per page.
 const lyricsCache = new Map();
@@ -103,190 +141,33 @@ async function fetchWithTimeout(url, opts, timeoutMs) {
   }
 }
 
-// Smart-sync (forced alignment) state
-const alignmentInProgress = new Set();   // song keys currently being aligned
-const alignTabBySongKey = new Map();      // songKey → tabId that initiated the alignment
-const ALIGN_STORAGE_PREFIX = "align:";
-
-async function getAlignedFromStorage(songKey) {
-  const storageKey = ALIGN_STORAGE_PREFIX + songKey;
-  const obj = await chrome.storage.local.get([storageKey]);
-  const v = obj[storageKey];
-  return Array.isArray(v) && v.length > 0 ? v : null;
-}
-
-async function setAlignedInStorage(songKey, lines) {
-  await chrome.storage.local.set({ [ALIGN_STORAGE_PREFIX + songKey]: lines });
-}
-
-async function maybeStartAlignment({ tabId, songKey, lyrics }) {
-  if (!songKey || !lyrics) return;
-  if (alignmentInProgress.has(songKey)) return;
-  // Alignment requires the audio capture pipeline to be running on THIS tab —
-  // offscreen only has a live audio source for the captured tab. If capture
-  // isn't active or is bound to a different tab, smart sync silently no-ops.
-  if (capturedTabId === null) return;
-  if (tabId != null && tabId !== capturedTabId) return;
-  // Already cached? skip.
-  const existing = await getAlignedFromStorage(songKey);
-  if (existing) return;
-
-  alignmentInProgress.add(songKey);
-  alignTabBySongKey.set(songKey, tabId);
-  const settings = await chrome.storage.local.get({
-    serverUrl: "ws://localhost:9876",
-    apiKey: "",
-  });
-  console.log(`[SW][align] starting alignment for ${songKey} on tab ${tabId}`);
-  chrome.runtime.sendMessage({
-    type: "START_ALIGNMENT",
-    songKey,
-    lyrics,
-    tabId,
-    serverUrl: settings.serverUrl,
-    apiKey: settings.apiKey,
-  }).catch(() => {});
-  // Inform the content script so it can surface an "Aligning..." status
-  if (tabId != null) {
-    chrome.tabs.sendMessage(tabId, {
-      type: "ALIGN_STATUS",
-      songKey,
-      status: "aligning",
-    }).catch(() => {});
-  }
-}
-
-// Wraps the LRCLib chain with a smart-sync cache lookup and a
-// fire-and-forget alignment kick-off when only plain lyrics are available.
+// Lyrics are a pure third-party database lookup (LRCLib synced/plain, with
+// Lyrics.ovh + Genius plain fallbacks). No backend transcription or forced
+// alignment — whatever the database returns is shown as-is.
 //
 // opts.lrclibOnly: skip Lyrics.ovh + Genius fallbacks (used during phase 1
 //   of the content-script's two-phase loop, so we only pay for fast LRCLib
 //   API calls across all candidates).
-// opts.forceRefresh: bypass the in-memory lyricsCache and the smart-sync
-//   cache (used by the manual Refresh button).
+// opts.forceRefresh: bypass the in-memory lyricsCache (used by the manual
+//   Refresh button).
 async function handleFetchLyrics(artist, track, tabId, opts) {
   const lrclibOnly = !!(opts && opts.lrclibOnly);
   const forceRefresh = !!(opts && opts.forceRefresh);
   const skipLrclib = !!(opts && opts.skipLrclib);
-  const songKey = cacheKey(artist, track);
+  const durationSec = (opts && opts.durationSec) || 0;
+  const album = (opts && opts.album) || "";
 
-  // Cache hit: return the previously aligned synced lines directly. Skipped
-  // when forceRefresh is set so the user can override a stale cached result.
-  if (!forceRefresh) {
-    const cached = await getAlignedFromStorage(songKey);
-    if (cached) {
-      return {
-        found: true,
-        syncedLyrics: null,
-        syncedLines: cached,
-        plainLyrics: null,
-        source: "smart-sync (cached)",
-      };
-    }
-  }
-
-  const result = await fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh, skipLrclib });
-
-  // If we got plain text only, fire alignment in the background. syncedLyrics
-  // already covers the synced case; no need to align.
-  const isPlainOnly = result.found && !result.syncedLyrics && result.plainLyrics;
-  if (isPlainOnly && tabId != null) {
-    maybeStartAlignment({ tabId, songKey, lyrics: result.plainLyrics }).catch(() => {});
-  }
-
-  return result;
-}
-
-function handleAlignResult(message) {
-  const songKey = message.songKey;
-  if (!songKey) return;
-  alignmentInProgress.delete(songKey);
-  const tabId = message.tabId != null ? message.tabId : alignTabBySongKey.get(songKey);
-  alignTabBySongKey.delete(songKey);
-
-  if (message.ok && Array.isArray(message.lines) && message.lines.length > 0) {
-    setAlignedInStorage(songKey, message.lines).catch((err) => {
-      console.warn("[SW][align] failed to cache result:", err);
-    });
-    if (tabId != null) {
-      chrome.tabs.sendMessage(tabId, {
-        type: "LYRICS_UPGRADE",
-        songKey,
-        lines: message.lines,
-      }).catch(() => {});
-    }
-    console.log(`[SW][align] alignment complete for ${songKey}: ${message.lines.length} lines`);
-  } else {
-    if (tabId != null) {
-      chrome.tabs.sendMessage(tabId, {
-        type: "ALIGN_STATUS",
-        songKey,
-        status: "failed",
-        error: message.error || "unknown",
-      }).catch(() => {});
-    }
-    console.log(`[SW][align] alignment failed for ${songKey}:`, message.error);
-  }
+  return fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh, skipLrclib, durationSec, album });
 }
 
 function cacheKey(artist, track) {
   return `${(artist || "").toLowerCase()}|${(track || "").toLowerCase()}`;
 }
 
-// ── Fuzzy track-name matching ──────────────────────────────────────────────
-// Used to verify that a result returned by LRCLib's free-text search is
-// actually the song we asked about. Without this, /api/search can return any
-// loosely-related song first when the title is messy (e.g. comma-separated
-// artists, capitalization mismatches, diacritics).
-
-function normalizeForMatch(s) {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")  // strip diacritics (ć→c, ž→z, …)
-    // Drop the same metadata noise words cleanTitle strips in bracket/paren
-    // form — covers cases where the noise survives cleanTitle (different
-    // delimiters, mid-string, or the YouTube metadata path bypasses it).
-    .replace(/\b(hd|hq|4k|1080p?|audio|video|lyrics?|official|live|remaster(?:ed)?|remix|rmx|stereo|mono)\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")        // collapse non-alphanumeric to spaces
-    // Some LRCLib entries embed the feature list inside the track name (e.g.
-    // "Hella Décalé (feat. …)") while others strip it. cleanTitle strips it
-    // from the request side; mirror that here so the candidate side matches
-    // regardless of how LRCLib stored it.
-    .replace(/\s(feat|ft)\s.*$/, "")
-    .trim();
-}
-
-// Iterative Levenshtein with two rolling rows. Sufficient for short song
-// titles (<200 chars).
-function levenshtein(a, b) {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  let v0 = new Array(b.length + 1);
-  let v1 = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j++) v0[j] = j;
-  for (let i = 0; i < a.length; i++) {
-    v1[0] = i + 1;
-    for (let j = 0; j < b.length; j++) {
-      const cost = a[i] === b[j] ? 0 : 1;
-      v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
-    }
-    [v0, v1] = [v1, v0];
-  }
-  return v0[b.length];
-}
-
-function fuzzyTrackMatch(candidate, requested) {
-  const a = normalizeForMatch(candidate);
-  const b = normalizeForMatch(requested);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  // Allow edits up to 15% of the longer string (min 2). Catches typos,
-  // missing/extra "the", "a remix", etc., while rejecting wholly different songs.
-  const tolerance = Math.max(2, Math.floor(Math.max(a.length, b.length) * 0.15));
-  return levenshtein(a, b) <= tolerance;
-}
+// normalizeForMatch / levenshtein / fuzzyTrackMatch now live in
+// shared/song-match.js (aliased at the top of this file) so the request side
+// and the match side can never drift apart. They're still used below by the
+// Genius scraper to verify a scraped hit actually matches what we asked for.
 
 // Genius.com — public web search + HTML scrape. Plain text only (no timestamps).
 // Has the widest coverage of the free sources, including lots of indie/regional
@@ -477,6 +358,8 @@ async function fetchFromLRCLib(artist, track, opts) {
   // for every candidate, so re-running /api/get + /api/search here is wasted
   // network time — jump straight to the Lyrics.ovh + Genius fallbacks.
   const skipLrclib = !!(opts && opts.skipLrclib);
+  const album = (opts && opts.album) || "";
+  const durationSec = (opts && opts.durationSec) || 0;
   const key = cacheKey(artist, track);
   if (!forceRefresh && lyricsCache.has(key)) return lyricsCache.get(key);
 
@@ -488,82 +371,46 @@ async function fetchFromLRCLib(artist, track, opts) {
   let lrclibMs = 0;
   if (!skipLrclib) {
    try {
-    // Fire /api/get (exact pair) and /api/search (free-text) in parallel,
-    // then merge. We can't trust /api/get alone: it'll happily return the
-    // plain version of a song even when a synced version exists under a
-    // slightly different artist/track spelling. Running both concurrently
-    // costs the same wall-clock as the slower one (~400ms) and gives us the
-    // full set of fuzzy matches to score from. Each branch catches its own
-    // error so a timeout on one doesn't discard the other's result.
-    const getPromise = (artist && track)
-      ? (async () => {
-          const params = new URLSearchParams();
-          params.set("artist_name", artist);
-          params.set("track_name", track);
-          const r = await fetchWithTimeout(`https://lrclib.net/api/get?${params.toString()}`, null, 5000);
-          if (!r.ok) return null;
-          return await r.json();
-        })().catch(() => null)
-      : Promise.resolve(null);
-
-    const searchPromise = (async () => {
-      const q = artist ? `${track} ${artist}` : track;
-      const r = await fetchWithTimeout(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, null, 5000);
-      if (!r.ok) return [];
-      return await r.json();
-    })().catch(() => []);
-
-    const [getData, searchArr] = await Promise.all([getPromise, searchPromise]);
-
-    // Merge + dedupe candidates. Both endpoints sometimes return the same row;
-    // dedupe by (artistName, trackName) so it doesn't appear twice in the
-    // alternatives list.
-    const candidates = [];
-    const seen = new Set();
-    const addCandidate = (r) => {
-      if (!r) return;
-      if (!r.syncedLyrics && !r.plainLyrics) return;
-      if (!fuzzyTrackMatch(r.trackName, track)) return;
-      const k = `${(r.artistName || "").toLowerCase()}|${(r.trackName || "").toLowerCase()}`;
-      if (seen.has(k)) return;
-      seen.add(k);
-      candidates.push(r);
-    };
-    // /api/get result first — it's the highest-confidence match by definition.
-    // /api/search hits follow; the sort below promotes synced versions over
-    // plain regardless of which endpoint surfaced them.
-    addCandidate(getData);
-    if (Array.isArray(searchArr)) {
-      for (const r of searchArr) addCandidate(r);
+    // Build the full request set for this candidate: /api/get (with + without
+    // duration), structured /api/search?track_name&artist_name, free-text
+    // /api/search?q, and diacritic-folded variants — all in parallel (~400ms
+    // wall-clock). Each fetch catches its own error so one timeout doesn't
+    // discard the others. See shared/song-match.js buildLrclibRequests.
+    const reqs = SM.buildLrclibRequests({ artist, track, album, durationSec });
+    const responses = await Promise.all(
+      reqs.map((req) =>
+        fetchWithTimeout(req.url, null, req.timeout || 5000)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      )
+    );
+    // /api/get returns one object; /api/search returns an array. Flatten.
+    const rows = [];
+    for (const resp of responses) {
+      if (!resp) continue;
+      if (Array.isArray(resp)) rows.push(...resp);
+      else rows.push(resp);
     }
 
-    if (candidates.length > 0) {
-      const wanted = normalizeForMatch(track);
-      const scored = candidates
-        .map((r) => ({
-          r,
-          dist: levenshtein(normalizeForMatch(r.trackName), wanted),
-          synced: !!r.syncedLyrics,
-        }))
-        // Synced first (always), then closest track-name match.
-        .sort((a, b) => {
-          if (a.synced !== b.synced) return a.synced ? -1 : 1;
-          return a.dist - b.dist;
-        });
-
-      const best = scored[0].r;
+    // Composite scoring: artist-aware gate, then synced-first then
+    // (trackDist + artistDist + durationPenalty). Picks the right artist's row
+    // even among many same-titled matches, and the right recording by duration.
+    const picked = SM.pickBest(rows, { track, artist, durationSec });
+    if (picked) {
       result = {
         found: true,
-        syncedLyrics: best.syncedLyrics || null,
-        plainLyrics: best.plainLyrics || null,
-        trackName: best.trackName,
-        artistName: best.artistName,
+        syncedLyrics: picked.best.syncedLyrics || null,
+        plainLyrics: picked.best.plainLyrics || null,
+        trackName: picked.best.trackName,
+        artistName: picked.best.artistName,
         source: "lrclib",
-        alternatives: scored.slice(1, 6).map((s) => ({
-          trackName: s.r.trackName,
-          artistName: s.r.artistName,
-          syncedLyrics: s.r.syncedLyrics || null,
-          plainLyrics: s.r.plainLyrics || null,
+        matchScore: picked.score,
+        matchSynced: picked.synced,
+        alternatives: picked.alternatives.map((r) => ({
+          trackName: r.trackName,
+          artistName: r.artistName,
+          syncedLyrics: r.syncedLyrics || null,
+          plainLyrics: r.plainLyrics || null,
           source: "lrclib",
         })),
       };
@@ -626,7 +473,7 @@ async function fetchFromLRCLib(artist, track, opts) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Handle AI_STATUS and ALIGN_RESULT from offscreen document
+  // Handle AI_STATUS / AI_LAG / seek messages from the offscreen document
   if (sender.url && sender.url.includes("offscreen.html")) {
     if (message.type === "AI_STATUS") {
       currentAIStatus = { status: message.status, detail: message.detail || null };
@@ -642,8 +489,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (capturedTabId !== null) {
         chrome.tabs.sendMessage(capturedTabId, message).catch(() => {});
       }
-    } else if (message.type === "ALIGN_RESULT") {
-      handleAlignResult(message);
     }
     return;
   }
@@ -688,7 +533,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "SET_MODE":
       currentMode = message.value;
-      chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
+      if (isAIMode(message.value)) {
+        // Switching to AI mid-session: fetch a filter token first (if a Website
+        // URL is configured) and push it before the offscreen WS reconnects.
+        resolveAuthToken(message.value, null).then((r) => {
+          if (r.gated) {
+            currentMode = "stft";
+            broadcastAIGated(r.gated);
+            chrome.runtime.sendMessage({ type: "SET_MODE", value: "stft" });
+          } else {
+            if (r.token) chrome.runtime.sendMessage({ type: "SET_API_KEY", value: r.token });
+            chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
+          }
+        });
+      } else {
+        chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
+      }
       break;
 
     case "SET_AI_MODEL":
@@ -709,6 +569,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         lrclibOnly: !!message.lrclibOnly,
         forceRefresh: !!message.forceRefresh,
         skipLrclib: !!message.skipLrclib,
+        durationSec: message.durationSec || 0,
+        album: message.album || "",
       }).then(sendResponse);
       return true; // async response
     }
@@ -787,6 +649,66 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Cross-browser fallback when the side-panel button can't grant the
 // activeTab gesture tabCapture needs (Brave/Edge/Vivaldi). The offscreen
 // document calls navigator.mediaDevices.getDisplayMedia() instead, which
+// ── Phase 5: Pro account / filter-token gating ──────────────────────────────
+// When a Website URL is configured AND an AI mode is requested, fetch a
+// short-lived filter token from the website and use it as the backend auth
+// token. Empty websiteUrl = disabled → the extension behaves exactly as before.
+function isAIMode(m) {
+  return m === "ai" || m === "ai2";
+}
+
+async function getFilterToken() {
+  const { websiteUrl } = await chrome.storage.local.get({ websiteUrl: "" });
+  const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+  if (!base) return { disabled: true };
+  try {
+    const res = await fetchWithTimeout(
+      `${base}/api/filter-token`,
+      { method: "POST", credentials: "include", headers: { Accept: "application/json" } },
+      8000,
+    );
+    if (res.ok) {
+      const data = await res.json();
+      return { ok: true, token: data.token, entitlement: data.entitlement };
+    }
+    let reason = null;
+    try { reason = (await res.json()).reason; } catch {}
+    return { ok: false, status: res.status, reason };
+  } catch {
+    return { ok: false, status: 0, reason: "network" };
+  }
+}
+
+// Resolve the backend auth token for a capture. For AI modes with a configured
+// website this is the filter token; otherwise the static apiKey. Returns
+// { token } on success, or { token, gated } when AI is requested but blocked.
+async function resolveAuthToken(mode, apiKey) {
+  if (!isAIMode(mode)) return { token: apiKey };
+  const r = await getFilterToken();
+  if (r.disabled) return { token: apiKey };   // gating off — legacy behaviour
+  if (r.ok) return { token: r.token };
+  const reason =
+    r.status === 401 ? "signin" :
+    r.status === 403 ? "verify_email" :
+    r.status === 402 ? (r.reason || "subscribe") :
+    "network";
+  return { token: apiKey, gated: reason };
+}
+
+function broadcastAIGated(reason) {
+  const messages = {
+    signin: "Sign in on the website to use AI filtering",
+    verify_email: "Verify your email to use AI filtering",
+    subscribe: "Subscribe to use AI filtering",
+    no_subscription: "Subscribe to use AI filtering",
+    trial_exhausted: "Free trial used up — subscribe for AI filtering",
+    trial_expired: "Trial period ended — subscribe for AI filtering",
+    network: "Can't reach the account server — using free mode",
+  };
+  const detail = messages[reason] || "AI filtering unavailable — using free mode";
+  chrome.runtime.sendMessage({ type: "AI_STATUS", status: "gated", detail }).catch(() => {});
+}
+
 // shows the browser's "Choose what to share" picker. The user selects the
 // tab, checks "Share audio", and capture proceeds through the same
 // post-stream pipeline as the tabCapture path.
@@ -804,6 +726,15 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
       serverUrl: "ws://localhost:9876",
       apiKey: "",
     });
+
+    // Phase 5: filter token for AI modes (see handleStartCapture).
+    let authToken = settings.apiKey;
+    if (isAIMode(currentMode)) {
+      const r = await resolveAuthToken(currentMode, settings.apiKey);
+      if (r.gated) { currentMode = "stft"; broadcastAIGated(r.gated); }
+      else authToken = r.token;
+    }
+
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
     console.log("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode, "aiModel:", aiModel);
@@ -812,7 +743,7 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
       mode: currentMode,
       aiModel: aiModel,
       serverUrl: settings.serverUrl,
-      apiKey: settings.apiKey,
+      apiKey: authToken,
     });
     return { success: true };
   } catch (err) {
@@ -844,6 +775,16 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
       apiKey: "",
     });
 
+    // Phase 5: for AI modes with a configured Website URL, fetch a filter token
+    // and use it as the backend auth token; otherwise use the static apiKey. If
+    // AI is requested but not entitled, fall back to free spectral mode.
+    let authToken = settings.apiKey;
+    if (isAIMode(currentMode)) {
+      const r = await resolveAuthToken(currentMode, settings.apiKey);
+      if (r.gated) { currentMode = "stft"; broadcastAIGated(r.gated); }
+      else authToken = r.token;
+    }
+
     // Prefer the streamId captured by the side panel/popup click handler —
     // that path keeps the activeTab user gesture intact. Fall back to
     // fetching one here for legacy callers; that path will fail with
@@ -865,7 +806,7 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
       mode: currentMode,
       aiModel: aiModel,
       serverUrl: settings.serverUrl,
-      apiKey: settings.apiKey,
+      apiKey: authToken,
     });
 
     return { success: true };

@@ -40,72 +40,14 @@
 
   const PLAYBACK_TICK_MS = 200;
 
-  // --- Title cleaning ---
-  const SUFFIX_PATTERNS = [
-    /\s*\(official[^)]*\)/i,
-    /\s*\[official[^\]]*\]/i,
-    /\s*\(lyrics?[^)]*\)/i,
-    /\s*\[lyrics?[^\]]*\]/i,
-    /\s*\(audio\)/i,
-    /\s*\[audio\]/i,
-    /\s*\(hd\)/i,
-    /\s*\[hd\]/i,
-    /\s*\(hq\)/i,
-    /\s*\[hq\]/i,
-    /\s*\(4k\)/i,
-    /\s*\[4k\]/i,
-    /\s*\(1080p?\)/i,
-    /\s*\[1080p?\]/i,
-    // Album-format markers commonly added to YouTube uploads
-    /\s*\(cd\)/i, /\s*\[cd\]/i,
-    /\s*\(lp\)/i, /\s*\[lp\]/i,
-    /\s*\(ep\)/i, /\s*\[ep\]/i,
-    /\s*\(album\)/i, /\s*\[album\]/i,
-    /\s*\(single\)/i, /\s*\[single\]/i,
-    /\s*\(remaster(ed)?[^)]*\)/i,
-    /\s*\[remaster(ed)?[^\]]*\]/i,
-    // "remix" / "rmx" can appear anywhere inside the parens or brackets
-    // (e.g. "(Extended Remix)", "[Acoustic Remix]", "(RMX 2020)").
-    /\s*\([^)]*\bremix\b[^)]*\)/i,
-    /\s*\[[^\]]*\bremix\b[^\]]*\]/i,
-    /\s*\([^)]*\brmx\b[^)]*\)/i,
-    /\s*\[[^\]]*\brmx\b[^\]]*\]/i,
-    /\s*\(live[^)]*\)/i,
-    /\s*\[live[^\]]*\]/i,
-    /\s*\(feat\.?[^)]*\)/i,
-    /\s*\[feat\.?[^\]]*\]/i,
-    /\s*ft\.?\s+.+$/i,
-    /\s*\(\d{4}[^)]*\)/,
-    /\s*\[\d{4}[^\]]*\]/,
-    /\s*\| spotify$/i,
-    /\s*- youtube$/i,
-    /\s*- soundcloud$/i,
-    // Trailing ", First Last, First Last(, …)" — the YouTube convention for
-    // featured artists when the channel didn't use "feat." Requires at least
-    // two name-shaped groups (each: capital letter + lowercase word, optionally
-    // 1-2 more such words) so single trailing comma clauses stay untouched.
-    /(\s*,\s*[\p{Lu}]\p{Ll}+(?:\s+[\p{Lu}]\p{Ll}+){0,2}){2,}\s*$/u,
-  ];
-
-  function cleanTitle(s) {
-    let out = s;
-    for (const re of SUFFIX_PATTERNS) out = out.replace(re, "");
-    return out.trim();
-  }
-
-  // When YouTube metadata gives us an artist AND the title starts with that
-  // same artist (e.g. "nipplepeople FRKA"), strip the duplicated prefix so
-  // the track candidate sent to LRCLib doesn't include the artist's name.
-  function stripArtistFromTrack(artist, track) {
-    if (!artist || !track) return track;
-    const lowerTrack = track.toLowerCase();
-    const lowerArtist = artist.toLowerCase();
-    if (lowerTrack.startsWith(lowerArtist + " ") ||
-        lowerTrack.startsWith(lowerArtist + "-")) {
-      return track.slice(artist.length).replace(/^[\s\-]+/, "").trim();
-    }
-    return track;
-  }
+  // --- Shared song-matching core ---
+  // cleanTitle / parseTitle / candidate generation now live in
+  // shared/song-match.js (loaded before this script via manifest
+  // content_scripts) so the request side and the service-worker match side
+  // can never drift apart. extractYouTubeMetadata() below stays here because it
+  // needs the DOM; its result is fed to SM.parseTitle as a hint.
+  const SM = (typeof globalThis !== "undefined" && globalThis.KarafiltSongMatch) || self.KarafiltSongMatch;
+  const cleanTitle = SM.cleanTitle;
 
   // Walk a script's text content from a marker keyword and return the JSON
   // object that follows the next `{`. Brace-counts so nested objects don't
@@ -227,144 +169,21 @@
     return result;
   }
 
-  // True if the metadata-derived track plausibly matches the current page
-  // title — guards against stale inline JSON after YouTube SPA navigation.
-  function metadataMatchesTitle(metaTrack, rawTitle) {
-    const norm = (s) => (s || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[̀-ͯ]/g, "")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-    const a = norm(rawTitle);
-    const b = norm(metaTrack);
-    if (!a || !b) return false;
-    return a.includes(b) || b.includes(a);
-  }
-
-  // Generate candidate {artist, track} pairs. We try several variants because
-  // real titles are messy:
-  //   - YouTube embeds clean metadata that we trust first (schema.org /
-  //     ytInitialPlayerResponse / channel name)
-  //   - "A, B, C - Song (Official Video)" → comma-separated artists
-  //   - "Track - Artist" vs "Artist - Track" — direction is ambiguous
-  //   - LRCLib often stores a different artist string than the title
-  // The service worker walks the candidates in order and stops at the first
-  // hit whose track name fuzzy-matches what we asked for.
-  function parseTitle(rawTitle) {
-    const candidates = [];
-
-    // Trust YouTube's embedded metadata when available — bypasses the
-    // ambiguous dash-split direction guess. cleanTitle the track in case
-    // ytInitialPlayerResponse includes "(Official Video)" etc.
-    //
-    // Staleness check: ytInitialPlayerResponse + schema.org are baked into
-    // the page at initial-load time. After a YouTube SPA navigation those
-    // inline scripts are still the OLD video's data. Verify the metadata
-    // track loosely matches the current document.title before trusting it;
-    // otherwise we'd happily search lyrics for the previous song.
+  // Build the metadata hint from YouTube's embedded data (DOM) and hand the
+  // raw title to the shared parser, which produces the ordered candidate
+  // {artist, track} pairs. All pure parsing lives in shared/song-match.js.
+  function buildSongHint() {
     const meta = extractYouTubeMetadata();
-    if (meta && meta.track && metadataMatchesTitle(meta.track, rawTitle)) {
-      let cleanedTrack = cleanTitle(meta.track);
-      // Drop the duplicated artist prefix if present — turns
-      // "nipplepeople FRKA" into "FRKA" when meta.artist="Nipplepeople".
-      if (meta.artist) cleanedTrack = stripArtistFromTrack(meta.artist, cleanedTrack);
-      // Skip the metadata candidate when the track itself still contains a
-      // dash separator — that means ytInitialPlayerResponse.title is just
-      // the raw video title (typical for non-"Topic" channels). The dash-
-      // split heuristic below will produce better candidates from it.
-      const tracKHasDash = /\s+[-–—]\s+/.test(cleanedTrack);
-      if (cleanedTrack && !tracKHasDash) {
-        if (meta.artist) {
-          candidates.push(...expandArtists(meta.artist, cleanedTrack));
-        } else {
-          candidates.push({ artist: "", track: cleanedTrack });
-        }
-      }
-    }
-
-    const title = cleanTitle(rawTitle);
-
-    // Spotify-style "Track · Artist"
-    if (title.includes(" · ")) {
-      const [song, artist] = title.split(" · ");
-      candidates.push(...expandArtists(artist.trim(), song.trim()));
-      return dedupCandidates(candidates);
-    }
-
-    // Pipe-separated "Artist | Track | OFFICIAL MUSIC VIDEO" — common on
-    // some music channels (e.g. JELENA KARLEUSA, balkan music uploads).
-    // Filter out segments that are only noise words so the "OFFICIAL …"
-    // trailing tag doesn't pollute the candidate list.
-    if (title.includes(" | ")) {
-      const looksLikeNoise = (s) =>
-        /^(?:\s*(?:official|music|video|audio|hd|hq|4k|1080p?|lyrics?))+\s*$/i.test(s);
-      // Strip a leading "NN " / "NN. " / "NN - " track number — common when
-      // a pipe-separated title comes from an album track listing.
-      const stripTrackNumber = (s) => s.replace(/^\d{1,2}[\s.\-]+/, "");
-      const parts = title
-        .split(/\s*\|\s*/)
-        .map((s) => stripTrackNumber(s.trim()))
-        .filter((s) => s && !looksLikeNoise(s));
-      if (parts.length >= 2) {
-        candidates.push(...expandArtists(parts[0], parts[1]));
-        candidates.push(...expandArtists(parts[1], parts[0]));
-        candidates.push({ artist: "", track: parts[0] });
-        candidates.push({ artist: "", track: parts[1] });
-        return dedupCandidates(candidates);
-      }
-      // Only one meaningful part survived — fall through to dash logic
-      // (in case the surviving part still has an "Artist - Track" pattern).
-    }
-
-    // YouTube-style "Artist - Track" (or any dash variant)
-    const sepMatch = title.match(/^(.+?)\s+[-–—]\s+(.+)$/);
-    if (sepMatch) {
-      const [, left, right] = sepMatch;
-      candidates.push(
-        // Forward direction (most common): left = artist, right = track
-        ...expandArtists(left.trim(), right.trim()),
-        // Reverse direction
-        ...expandArtists(right.trim(), left.trim()),
-        // Track-only fallbacks — works against LRCLib's free-text search
-        // even when the artist string is unrecognizable.
-        { artist: "", track: right.trim() },
-        { artist: "", track: left.trim() },
-      );
-      return dedupCandidates(candidates);
-    }
-
-    candidates.push({ artist: "", track: title });
-    return dedupCandidates(candidates);
+    if (!meta) return {};
+    return {
+      metaTrack: meta.track || "",
+      metaArtist: meta.artist || "",
+      author: meta.artist || "",
+    };
   }
 
-  // Given a (possibly comma-separated) artist string and a track, yield:
-  // [{full artist, track}, {first comma-split, track}, {second, track}, …]
-  // The full artist comes first because exact matches on LRCLib are fastest.
-  function expandArtists(artistStr, trackStr) {
-    const out = [{ artist: artistStr, track: trackStr }];
-    if (artistStr && /[,&]| feat\.? | ft\.? | x /i.test(artistStr)) {
-      const parts = artistStr
-        .split(/\s*(?:,|&| feat\.? | ft\.? | x )\s*/i)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      for (const a of parts) {
-        out.push({ artist: a, track: trackStr });
-      }
-    }
-    return out;
-  }
-
-  function dedupCandidates(list) {
-    const seen = new Set();
-    const out = [];
-    for (const c of list) {
-      const key = `${(c.artist || "").toLowerCase()}|${(c.track || "").toLowerCase()}`;
-      if (!c.track || seen.has(key)) continue;
-      seen.add(key);
-      out.push(c);
-    }
-    return out;
+  function parseTitle(rawTitle) {
+    return SM.parseTitle(rawTitle, buildSongHint());
   }
 
   // --- LRC parser ---
@@ -421,6 +240,8 @@
             type: "FETCH_LYRICS",
             artist: c.artist,
             track: c.track,
+            album: c.album || "",
+            durationSec: (opts && opts.durationSec) || 0,
             lrclibOnly: !!(opts && opts.lrclibOnly),
             forceRefresh: !!(opts && opts.forceRefresh),
             skipLrclib: !!(opts && opts.skipLrclib),
@@ -458,26 +279,37 @@
       return { found: false, invalidated: true };
     }
     const forceRefresh = !!(opts && opts.forceRefresh);
-    const candidates = parseTitle(title);
+    // Cap to the top candidates (already priority-ordered by the parser) so we
+    // don't fan out dozens of parallel LRCLib requests on a messy title — too
+    // many at once makes LRCLib throttle and time out, dropping good matches.
+    const candidates = parseTitle(title).slice(0, 5);
+    // The duration of the playing media disambiguates same-titled recordings
+    // and enables LRCLib's signature match. 0 = unknown (live stream / not yet
+    // loaded), in which case the service worker simply ignores it.
+    const media = findMedia();
+    const durationSec = media && isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
 
-    // Phase 1: fire all LRCLib-only lookups in parallel, then prefer ANY
-    // synced match over a plain one — even if the synced match came from a
-    // lower-priority candidate. This avoids the case where candidate #1 hits
-    // an unsynced row while candidate #2 has the synced version under a
-    // slightly different artist/track spelling. Within a tier (synced vs.
-    // plain), candidate priority still decides.
+    // Phase 1: fire all LRCLib-only lookups in parallel. The service worker
+    // returns a composite matchScore per candidate (lower = better artist +
+    // track + duration fit, with a synced bonus folded in). Pick the globally
+    // best-scoring match across ALL candidates — not merely the first candidate
+    // that happened to hit a synced row.
     const phase1 = candidates.map((c) =>
-      sendFetchLyrics(c, { lrclibOnly: true, forceRefresh })
+      sendFetchLyrics(c, { lrclibOnly: true, forceRefresh, durationSec })
     );
     const phase1Results = await Promise.all(phase1);
     for (const r of phase1Results) {
       if (r && r.invalidated) return r;
     }
-    for (const r of phase1Results) {
-      if (r && r.found && r.syncedLyrics) return r;
-    }
-    for (const r of phase1Results) {
-      if (r && r.found) return r;
+    // The service worker folds a synced-bonus into matchScore, so a single
+    // ascending sort picks the best fit across all candidates.
+    const isSynced = (r) => !!r.syncedLyrics;
+    const effScore = (r) =>
+      r.matchScore != null ? r.matchScore : isSynced(r) ? -5 : 50;
+    const found = phase1Results.filter((r) => r && r.found);
+    if (found.length) {
+      found.sort((a, b) => effScore(a) - effScore(b));
+      return found[0];
     }
 
     // Phase 2: full chain (LRCLib already known to miss, so this is really
@@ -485,7 +317,7 @@
     // redundant LRCLib round-trip — phase 1 already tried it for every candidate.
     const fallback = pickFallbackCandidate(candidates);
     if (fallback) {
-      const result = await sendFetchLyrics(fallback, { lrclibOnly: false, forceRefresh, skipLrclib: true });
+      const result = await sendFetchLyrics(fallback, { lrclibOnly: false, forceRefresh, skipLrclib: true, durationSec });
       if (result.invalidated) return result;
       if (result.found) return result;
     }
@@ -728,15 +560,8 @@
       artistName: lrclibResult.artistName,
       source: lrclibResult.source,
       syncedLyrics: lrclibResult.syncedLyrics || null,
-      syncedLines: Array.isArray(lrclibResult.syncedLines) ? lrclibResult.syncedLines : null,
       plainLyrics: lrclibResult.plainLyrics || null,
     } : null;
-    // Cached / pre-aligned synced lines (skip LRC parsing — already structured).
-    if (lrclibResult.found && Array.isArray(lrclibResult.syncedLines) && lrclibResult.syncedLines.length > 0) {
-      const label = lrclibResult.source ? `${lrclibResult.source} (synced)` : "Synced";
-      commitSynced(lrclibResult.syncedLines, label, lrclibResult.alternatives, lrclibMeta);
-      return;
-    }
 
     if (lrclibResult.found && lrclibResult.syncedLyrics) {
       const lines = parseLRC(lrclibResult.syncedLyrics);
@@ -942,17 +767,6 @@
     });
   }
 
-  // Build all possible song-keys for the current title. The service worker
-  // builds its cacheKey from whichever (artist, track) pair fetchLyrics()
-  // succeeded with, which may be either the first or second candidate from
-  // parseTitle(). Match against the full set so we don't drop a valid upgrade.
-  function currentSongKeys() {
-    const candidates = parseTitle(document.title);
-    return candidates.map(
-      (c) => `${(c.artist || "").toLowerCase()}|${(c.track || "").toLowerCase()}`
-    );
-  }
-
   // --- Respond to messages ---
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "REQUEST_LYRICS_STATE") {
@@ -981,22 +795,6 @@
       currentStatus = "Refreshing…";
       publishState();
       loadLyricsForCurrentSong({ forceRefresh: true });
-    } else if (message.type === "LYRICS_UPGRADE") {
-      // Smart-sync result: replace plain lyrics with synced lines for the
-      // current song. Only apply if the song key still matches (user might
-      // have moved on while alignment was running).
-      const keys = currentSongKeys();
-      if (message.songKey && !keys.includes(message.songKey)) {
-        console.log("[KFL-CS] LYRICS_UPGRADE for stale song, ignoring", message.songKey, "vs", keys);
-        return;
-      }
-      if (Array.isArray(message.lines) && message.lines.length > 0) {
-        parsedLines = message.lines;
-        plainLyrics = null;
-        currentStatus = "Smart sync (aligned)";
-        publishState();
-        console.log("[KFL-CS] LYRICS_UPGRADE applied:", message.lines.length, "lines");
-      }
     } else if (message.type === "SYNC_CONTROL") {
       // Popup countdown asks us to pause / play the active media so the
       // capture and the original audio start together at "GO".
@@ -1032,16 +830,6 @@
         console.log(`[KFL-CS] AI sync seek: ${delta.toFixed(2)}s → currentTime=${newTime.toFixed(2)}s`);
       } catch {
         // currentTime is settable only when readyState ≥ 1 — ignore otherwise.
-      }
-    } else if (message.type === "ALIGN_STATUS") {
-      const keys = currentSongKeys();
-      if (message.songKey && !keys.includes(message.songKey)) return;
-      if (message.status === "aligning" && plainLyrics && parsedLines.length === 0) {
-        currentStatus = (currentStatus || "Lyrics") + " · Aligning…";
-        publishState();
-      } else if (message.status === "failed") {
-        // Don't surface alignment failures aggressively — just log.
-        console.log("[KFL-CS] alignment failed:", message.error);
       }
     }
   });

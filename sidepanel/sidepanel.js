@@ -12,7 +12,7 @@ const lyricsLoaderEl = document.getElementById("lyrics-loader");
 
 // Status texts that mean "we're actively fetching/processing — show the loader".
 // Anything else (e.g. "No lyrics found", source badge text) means we're done.
-const LOADING_STATUS_RE = /(loading|looking up|refreshing|aligning|searching)/i;
+const LOADING_STATUS_RE = /(loading|looking up|refreshing|searching)/i;
 
 function isLoadingState() {
   if (parsedLines.length > 0 || plainLyrics) return false;
@@ -67,30 +67,9 @@ let lastPlaybackDuration = 0;
 let allMatches = [];
 let currentMatchIdx = -1;
 
-// --- Title cleaning (kept in sync with content script) ---
-const SUFFIX_PATTERNS = [
-  /\s*\(official[^)]*\)/i,
-  /\s*\[official[^\]]*\]/i,
-  /\s*\(lyrics?[^)]*\)/i,
-  /\s*\[lyrics?[^\]]*\]/i,
-  /\s*\(audio\)/i,
-  /\s*\(hd\)/i,
-  /\s*\(4k\)/i,
-  /\s*\(remaster(ed)?[^)]*\)/i,
-  /\s*\(live[^)]*\)/i,
-  /\s*\(feat\.?[^)]*\)/i,
-  /\s*ft\.?\s+.+$/i,
-  /\s*\(\d{4}[^)]*\)/,
-  /\s*\| spotify$/i,
-  /\s*- youtube$/i,
-  /\s*- soundcloud$/i,
-];
-
-function cleanTitle(s) {
-  let out = s || "";
-  for (const re of SUFFIX_PATTERNS) out = out.replace(re, "");
-  return out.trim();
-}
+// --- Title cleaning (shared/song-match.js, loaded before this script) ---
+const cleanTitle = (window.KarafiltSongMatch && window.KarafiltSongMatch.cleanTitle)
+  || ((s) => (s || "").trim());
 
 // --- Rendering ---
 function setStatus(text) {
@@ -158,7 +137,7 @@ function renderMatchesPicker() {
   altsListEl.innerHTML = "";
   allMatches.forEach((m, i) => {
     const isCurrent = i === currentMatchIdx;
-    const isSynced = !!(m.syncedLyrics || (Array.isArray(m.syncedLines) && m.syncedLines.length > 0));
+    const isSynced = !!m.syncedLyrics;
     const item = document.createElement("button");
     item.className = "alternative-item"
       + (isSynced ? " synced" : "")
@@ -188,11 +167,8 @@ function switchToMatch(index) {
   if (!m) return;
   currentMatchIdx = index;
 
-  const isSynced = !!(m.syncedLyrics || (Array.isArray(m.syncedLines) && m.syncedLines.length > 0));
-  if (Array.isArray(m.syncedLines) && m.syncedLines.length > 0) {
-    parsedLines = m.syncedLines;
-    plainLyrics = null;
-  } else if (m.syncedLyrics) {
+  const isSynced = !!m.syncedLyrics;
+  if (m.syncedLyrics) {
     const lines = parseLRC(m.syncedLyrics);
     parsedLines = lines.length > 0 ? lines : [];
     plainLyrics = lines.length > 0 ? null : (m.plainLyrics || null);
@@ -806,6 +782,7 @@ if (spToggleBtn && window.bindKaraokeControls) {
     settingsPanel: $sp("sp-settings-panel"),
     serverUrlInput: $sp("sp-server-url"),
     apiKeyInput: $sp("sp-api-key"),
+    websiteUrlInput: $sp("sp-website-url"),
     countdownOverlay: $sp("sp-countdown-overlay"),
     countdownNumber: $sp("sp-countdown-number"),
     countdownCancelBtn: $sp("sp-countdown-cancel"),

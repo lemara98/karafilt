@@ -37,6 +37,7 @@ window.bindKaraokeControls({
   settingsPanel: $("settings-panel"),
   serverUrlInput: $("server-url"),
   apiKeyInput: $("api-key"),
+  websiteUrlInput: $("website-url"),
   countdownOverlay: $("countdown-overlay"),
   countdownNumber: $("countdown-number"),
   countdownCancelBtn: $("countdown-cancel"),

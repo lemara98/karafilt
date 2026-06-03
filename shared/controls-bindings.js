@@ -29,6 +29,7 @@
     aiModel: "htdemucs",
     serverUrl: "ws://localhost:9876",
     apiKey: "",
+    websiteUrl: "",
   };
 
   function isAIMode(mode) {
@@ -158,54 +159,27 @@
     if (has(els, "toggleBtn")) {
       els.toggleBtn.addEventListener("click", async () => {
         if (!isActive) {
-          if (!cachedTabId) {
+          let tabId = cachedTabId;
+          if (tabId == null) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab && tab.id != null ? tab.id : null;
+          }
+          if (tabId == null) {
             if (els.statusText) els.statusText.textContent = "No active tab";
             return;
           }
-          // Synchronous call inside the click handler with explicit
-          // targetTabId — preserves both the user gesture and the activeTab
-          // grant Chrome needs to authorize the capture. Capturing the
-          // promise (not awaiting) keeps the gesture intact while we set up
-          // the rest of the request.
-          const streamIdPromise = chrome.tabCapture
-            .getMediaStreamId({ targetTabId: cachedTabId })
-            .catch((err) => err instanceof Error ? err : new Error(String(err)));
 
           if (els.statusText) els.statusText.textContent = "Starting...";
 
-          const streamIdOrErr = await streamIdPromise;
-          if (typeof streamIdOrErr !== "string") {
-            const msg = streamIdOrErr.message || "Capture failed";
-            // Brave/Edge/Vivaldi don't accept side-panel button clicks as a
-            // valid invocation for chrome.tabCapture. Fall back to the
-            // Web-standard getDisplayMedia (a system picker dialog) — works
-            // cross-browser at the cost of one extra click per Start.
-            const isInvocationErr = /not been invoked|activeTab/i.test(msg);
-            if (isInvocationErr) {
-              if (els.statusText) els.statusText.textContent = "Choose the tab to filter...";
-              const response = await chrome.runtime.sendMessage({
-                type: "START_CAPTURE_DISPLAY_MEDIA",
-                tabId: cachedTabId,
-                mode: els.modeSelect ? els.modeSelect.value : DEFAULTS.mode,
-                aiModel: (els.modeSelect && isAIMode(els.modeSelect.value) && els.aiModelSelect)
-                  ? els.aiModelSelect.value
-                  : undefined,
-              });
-              if (response && response.success) {
-                setActiveUI(true);
-              } else if (els.statusText) {
-                els.statusText.textContent = response ? response.error : "Couldn't start capture";
-              }
-              return;
-            }
-            if (els.statusText) els.statusText.textContent = msg;
-            return;
-          }
-
+          // Let the SERVICE WORKER acquire the stream id (no streamId sent). The
+          // SW holds the extension's activeTab grant from the action that opened
+          // the side panel, so it captures the CURRENT tab directly — no
+          // screen-share picker. (Restores the pre-ec1e570 behaviour.) If the
+          // grant is missing, the SW returns an error and we point at the
+          // no-picker paths (keyboard shortcut / right-click menu).
           const response = await chrome.runtime.sendMessage({
             type: "START_CAPTURE",
-            tabId: cachedTabId,
-            streamId: streamIdOrErr,
+            tabId,
             mode: els.modeSelect ? els.modeSelect.value : DEFAULTS.mode,
             aiModel: (els.modeSelect && isAIMode(els.modeSelect.value) && els.aiModelSelect)
               ? els.aiModelSelect.value
@@ -215,7 +189,8 @@
           if (response && response.success) {
             setActiveUI(true);
           } else if (els.statusText) {
-            els.statusText.textContent = response ? response.error : "Unknown error";
+            els.statusText.textContent =
+              "Couldn't start — press Ctrl+Shift+K, or right-click the page → Filter this tab";
           }
         } else {
           chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -278,6 +253,14 @@
       });
     }
 
+    // Website URL (Pro account). The service worker reads this from storage when
+    // an AI mode is started, to fetch a filter token. Empty = local-only / no Pro.
+    if (has(els, "websiteUrlInput")) {
+      els.websiteUrlInput.addEventListener("change", () => {
+        chrome.storage.local.set({ websiteUrl: els.websiteUrlInput.value.trim() });
+      });
+    }
+
     // ── Initial state from storage + active capture state ─────────────────
     chrome.storage.local.get(DEFAULTS, (settings) => {
       if (els.modeSelect) els.modeSelect.value = settings.mode;
@@ -285,6 +268,7 @@
       if (els.mixValue) els.mixValue.textContent = settings.mix + "%";
       if (els.serverUrlInput) els.serverUrlInput.value = settings.serverUrl;
       if (els.apiKeyInput) els.apiKeyInput.value = settings.apiKey;
+      if (els.websiteUrlInput) els.websiteUrlInput.value = settings.websiteUrl;
       if (els.modeHint) els.modeHint.textContent = MODE_HINTS[settings.mode] || "";
       updateAIOptionsVisibility();
 
@@ -325,6 +309,9 @@
       }
       if (changes.apiKey && els.apiKeyInput && document.activeElement !== els.apiKeyInput) {
         els.apiKeyInput.value = changes.apiKey.newValue;
+      }
+      if (changes.websiteUrl && els.websiteUrlInput && document.activeElement !== els.websiteUrlInput) {
+        els.websiteUrlInput.value = changes.websiteUrl.newValue;
       }
     });
 
