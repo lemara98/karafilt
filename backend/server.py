@@ -45,6 +45,13 @@ async def main(port, device, auth_token=None, num_workers=4):
     else:
         print("Authentication disabled (no --auth-token provided)")
 
+    if os.environ.get("FILTER_JWT_SECRET"):
+        print("Filter-token (JWT) auth enabled via FILTER_JWT_SECRET")
+        if os.environ.get("KARAFILT_USAGE_URL"):
+            print(f"Usage metering → {os.environ.get('KARAFILT_USAGE_URL')}")
+        else:
+            print("Usage metering disabled (set KARAFILT_USAGE_URL + USAGE_API_SECRET)")
+
     print(f"\nStarting WebSocket server on ws://localhost:{port} (workers={num_workers})")
     async with websockets.serve(
         functools.partial(

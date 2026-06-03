@@ -3,8 +3,6 @@ torch>=2.0
 torchaudio
 websockets
 numpy
+pyjwt>=2.8   # Phase 3: verify website-issued filter tokens (set FILTER_JWT_SECRET)
 # Optional: install for BS-Roformer, Mel-Roformer, MDX23C, UVR models
 # audio-separator>=0.17
-# Optional: install for smart-sync (forced alignment of plain lyrics → synced LRC).
-# whisperx pulls faster-whisper, pyannote.audio, transformers, and needs ffmpeg.
-# whisperx>=3.1
