@@ -57,6 +57,21 @@ Your settings (mode, slider position, model, server URL) are saved automatically
 
 ## For Developers
 
+### Repository layout
+
+Karafilt spans **two repositories**:
+
+- **`karaoke-filter-plugin`** (this repo) — the Chrome extension + the Python/Demucs
+  real-time filtering server (`backend/`).
+- **`website`** — the Next.js web app + API: accounts, email verification, billing,
+  reviews, donations, and the trial/subscription ledger.
+
+The two run as **separate servers** that cooperate through a small signed-token
+contract (the website is the single source of truth for accounts and the one-time
+trial meter; the filtering server only verifies a token). The full design is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and the build plan that drives the
+current refactor is in [`docs/BUILD_BRIEF.md`](docs/BUILD_BRIEF.md).
+
 ### Architecture
 
 ```
@@ -135,4 +150,20 @@ When running with `--auth-token`, clients must send an auth message before any o
 
 ## License
 
-*TBD*
+Karafilt is open source, licensed **by component**:
+
+- The **browser extension** (everything outside `backend/`) is **MIT** — see
+  [`LICENSE`](LICENSE).
+- The **Python real-time vocal-separation server** under [`backend/`](backend/) is
+  **AGPL-3.0** — see [`backend/LICENSE`](backend/LICENSE). The copyleft terms mean
+  anyone who runs a modified version of the server as a network service must make
+  their source available; this keeps the hosted-backend ecosystem open.
+
+Third-party dependencies (Demucs, PyTorch, Next.js, etc.) remain under their own
+licenses. Choosing MIT/AGPL for this project's own code does not affect or
+conflict with them.
+
+Copyright © 2026 Betania.io.
+
+See also [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
