@@ -4,11 +4,29 @@ Everything to paste into the CWS developer dashboard. Build the zip with
 `scripts/package.sh` (output: `dist/karafilt-<version>.zip`).
 
 Still needed before submitting (manual):
-- [ ] 3–5 screenshots, 1280×800 (side panel with synced lyrics on a YouTube
-      video; the mode selector; the popup; karaoke focus mode)
-- [ ] Small promo tile, 440×280 (wordmark on brand background — assets in `icons/`)
-- [ ] Privacy policy live at `https://karafilt.com/privacy` (website repo)
+- [ ] 3–5 screenshots, 1280×800 — see the shot list below
+- [x] Small promo tile: `store-assets/promo-tile-440x280.png`
+- [x] Marquee (optional but used for feature placement): `store-assets/marquee-1400x560.png`
+- [ ] Privacy policy live at `https://karafilt.com/privacy` (page is written in
+      the website repo; needs the site deployed)
 - [ ] CWS developer account ($5 one-time)
+
+## Screenshot shot list (1280×800)
+
+The side panel is browser chrome, so DevTools can't capture it — take OS
+window screenshots and crop to 1280×800 (GIMP, or `convert in.png -crop
+1280x800+X+Y out.png`). Load the packaged build (`scripts/package.sh`, then
+load `dist/` contents unpacked) so what's shown is what ships.
+
+1. **Hero:** YouTube music video playing + side panel showing synced lyrics
+   with the current line highlighted, filter running (status "Filtering").
+   Pick a song LRCLib has synced (most chart hits work).
+2. **Karaoke focus mode:** same song, focus mode on — the big 3-line page view.
+3. **Modes:** the mode dropdown open showing Spectral / Basic / AI Separation /
+   AI + Deep Clean, with the AI status badge visible.
+4. **Alternatives picker:** the "other matches" dropdown open, showing
+   multiple versions of a song (synced badges visible).
+5. **Popup (optional):** the compact popup with the vocal/instrumental mix slider.
 
 ---
 
