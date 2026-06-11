@@ -142,7 +142,6 @@ function renderMatchesPicker() {
     item.className = "alternative-item"
       + (isSynced ? " synced" : "")
       + (isCurrent ? " current" : "");
-    if (isCurrent) item.disabled = true;
     const track = document.createElement("span");
     track.className = "alt-track";
     track.textContent = m.trackName || "(unknown track)";
@@ -154,9 +153,12 @@ function renderMatchesPicker() {
       (isCurrent ? " · current" : "");
     item.appendChild(track);
     item.appendChild(meta);
-    if (!isCurrent) {
-      item.addEventListener("click", () => switchToMatch(i));
-    }
+    // Clicking a different match switches to it (switchToMatch also closes the
+    // dropdown); clicking the already-selected one just closes the dropdown.
+    item.addEventListener("click", () => {
+      if (isCurrent) altsBarEl.classList.remove("open");
+      else switchToMatch(i);
+    });
     altsListEl.appendChild(item);
   });
 }

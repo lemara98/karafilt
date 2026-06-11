@@ -429,8 +429,13 @@
   // treat it as a bonus: if the server is healthy it sharpens the match, if it's
   // slow it's dropped and the searches carry the lookup. This keeps the request
   // count and latency low so LRCLib doesn't throttle us into timeouts.
-  const GET_TIMEOUT = 3500;
-  const SEARCH_TIMEOUT = 5000;
+  // LRCLib is a free community server and is often SLOW — measured 7–9.5s per
+  // request at times (HTTP 200, just slow, not rate-limited). The old 3.5s/5s
+  // timeouts aborted every request before it answered → guaranteed misses. Give
+  // it real headroom; the concurrency cap + dedup + foreground-only fetching keep
+  // the request volume low enough that a longer timeout doesn't pile up.
+  const GET_TIMEOUT = 12000;
+  const SEARCH_TIMEOUT = 12000;
   function buildLrclibRequests(cand) {
     const artist = (cand && cand.artist) || "";
     const track = (cand && cand.track) || "";
@@ -457,37 +462,57 @@
       const ft = asciiFold(track);
       const ga = fa || artist;
       const gt = ft || track;
-      add(getUrl(ga, gt, durationSec), "get", GET_TIMEOUT);
-      // structured ranked search (precise)
-      const sp = new URLSearchParams();
-      sp.set("track_name", track);
-      sp.set("artist_name", artist);
-      if (album) sp.set("album_name", album);
-      add(`${LRCLIB_BASE}/api/search?${sp.toString()}`, "search", SEARCH_TIMEOUT);
+      // /api/get is the exact "signature" lookup, but `duration` is an EXACT
+      // filter on it (±~2s): passing the VIDEO length makes it 404 whenever that
+      // differs from LRCLib's stored audio length (intros, ads, re-masters,
+      // "- Topic" re-uploads), silently losing the sharpest match. So we OMIT
+      // duration here — it's folded back in via scoring (durationPenalty) and the
+      // duration-corroborated accept path. Same request count as before, but it
+      // now resolves instead of 404-ing.
+      add(getUrl(ga, gt, 0), "get", GET_TIMEOUT);
     }
     if (track) {
-      // free-text search — broadest recall, tolerant of messy artist strings
+      // ONE free-text search — broadest recall, tolerant of messy artist strings.
+      // Kept lean (get + one search per candidate, like the fast original): the
+      // structured + diacritic-folded variants tripled the request count and,
+      // under LRCLib's ~6-connections-per-host cap, made everything queue and
+      // time out. Fewer requests that complete beat more requests that abort.
       const q = artist ? `${track} ${artist}` : track;
       add(`${LRCLIB_BASE}/api/search?q=${encodeURIComponent(q)}`, "search", SEARCH_TIMEOUT);
-      const fq = asciiFold(q);
-      if (fq && fq !== q.toLowerCase()) {
-        add(`${LRCLIB_BASE}/api/search?q=${encodeURIComponent(fq)}`, "search", SEARCH_TIMEOUT);
-      }
     }
     return reqs;
   }
 
   // ── Result scoring ─────────────────────────────────────────────────────
-  // A row is accepted if its track fuzzy-matches OR (track is close AND the
-  // artist strongly matches). Artist alone never rejects a track match.
+  // A row is accepted if its track fuzzy-matches (15%), OR the track is close
+  // (30%) AND the artist strongly matches, OR — new — the recording DURATION
+  // matches within ~3s AND the title is at least roughly close (35%). A
+  // near-exact duration is strong evidence it's the same recording, so it
+  // recovers remix / "feat" / translated-title rows LRCLib stores under a
+  // different name. Artist alone never rejects a track match.
   function accept(row, want) {
     if (fuzzyTrackMatch(row.trackName, want.track)) return true;
-    if (!want.artist) return false;
     const a = normalizeForMatch(row.trackName);
     const b = normalizeForMatch(want.track);
     if (!a || !b) return false;
-    const tol = Math.max(3, Math.floor(Math.max(a.length, b.length) * 0.3));
-    return levenshtein(a, b) <= tol && artistMatchStrong(row.artistName, want.artist);
+
+    // Path A: track close + artist strongly matches.
+    if (want.artist) {
+      const tol = Math.max(3, Math.floor(Math.max(a.length, b.length) * 0.3));
+      if (levenshtein(a, b) <= tol && artistMatchStrong(row.artistName, want.artist)) {
+        return true;
+      }
+    }
+
+    // Path B: duration corroborates (tight) + title roughly close. The tight
+    // duration window is what guards against false positives here.
+    if (want.durationSec > 0 && row.duration > 0 &&
+        Math.abs(row.duration - want.durationSec) <= 3) {
+      const tol = Math.max(4, Math.floor(Math.max(a.length, b.length) * 0.35));
+      if (levenshtein(a, b) <= tol) return true;
+    }
+
+    return false;
   }
 
   // Soft, capped duration penalty (video length ≠ audio length, so generous).

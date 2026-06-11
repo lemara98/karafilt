@@ -141,6 +141,67 @@ async function fetchWithTimeout(url, opts, timeoutMs) {
   }
 }
 
+// ── lrclib request throttle ─────────────────────────────────────────────────
+// A song lookup can fan out ~15 lrclib requests (up to 5 candidates × 3 URLs).
+// The browser caps ~6 connections per host, so the overflow is QUEUED by the
+// browser — but each request's abort timer is already running while it waits, so
+// the queued ones time out before they're even sent (observed: repeated
+// "lyrics: miss in 5000ms"). Two fixes:
+//   1. Cap our own concurrency so the abort timer only starts once a slot is
+//      free — every request then gets its full timeout window.
+//   2. Dedupe identical in-flight URLs so overlapping candidate queries share a
+//      single network call.
+const LRCLIB_MAX_CONCURRENT = 5;            // stay under the browser's ~6/host
+const LRCLIB_MAX_QUEUE = 16;                // bound the backlog (drop the stalest)
+let lrclibActive = 0;
+const lrclibWaiters = [];
+const lrclibInflight = new Map();           // url -> Promise<json|null>
+
+// Resolves true once a slot is free, or false if the request was evicted because
+// the queue overflowed (a backlog of stale/superseded lookups). The timeout only
+// starts after this resolves true, so queued requests get their full window.
+function lrclibAcquire() {
+  if (lrclibActive < LRCLIB_MAX_CONCURRENT) {
+    lrclibActive++;
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    lrclibWaiters.push(resolve);
+    // Evict the OLDEST waiter (stalest — usually a song the user already skipped
+    // past) so the queue can't grow unbounded and starve the current request.
+    while (lrclibWaiters.length > LRCLIB_MAX_QUEUE) {
+      lrclibWaiters.shift()(false);
+    }
+  });
+}
+
+function lrclibRelease() {
+  const next = lrclibWaiters.shift();
+  if (next) next(true);      // transfer the slot straight to the next waiter
+  else lrclibActive--;       // otherwise free it
+}
+
+// Throttled + deduped GET → parsed JSON (or null).
+function lrclibFetchJson(url, timeoutMs) {
+  const existing = lrclibInflight.get(url);
+  if (existing) return existing;
+  const p = (async () => {
+    const proceed = await lrclibAcquire();
+    if (!proceed) return null;          // evicted from the queue (stale) — skip
+    try {
+      const r = await fetchWithTimeout(url, null, timeoutMs);
+      return r.ok ? await r.json() : null;
+    } catch {
+      return null;
+    } finally {
+      lrclibRelease();
+    }
+  })();
+  lrclibInflight.set(url, p);
+  p.finally(() => lrclibInflight.delete(url));
+  return p;
+}
+
 // Lyrics are a pure third-party database lookup (LRCLib synced/plain, with
 // Lyrics.ovh + Genius plain fallbacks). No backend transcription or forced
 // alignment — whatever the database returns is shown as-is.
@@ -377,12 +438,10 @@ async function fetchFromLRCLib(artist, track, opts) {
     // wall-clock). Each fetch catches its own error so one timeout doesn't
     // discard the others. See shared/song-match.js buildLrclibRequests.
     const reqs = SM.buildLrclibRequests({ artist, track, album, durationSec });
+    // Throttled + deduped so the ~15-request burst doesn't exceed the browser's
+    // per-host connection cap and time out (see lrclibFetchJson above).
     const responses = await Promise.all(
-      reqs.map((req) =>
-        fetchWithTimeout(req.url, null, req.timeout || 5000)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-      )
+      reqs.map((req) => lrclibFetchJson(req.url, req.timeout || 5000))
     );
     // /api/get returns one object; /api/search returns an array. Flatten.
     const rows = [];

@@ -279,38 +279,51 @@
       return { found: false, invalidated: true };
     }
     const forceRefresh = !!(opts && opts.forceRefresh);
-    // Cap to the top candidates (already priority-ordered by the parser) so we
-    // don't fan out dozens of parallel LRCLib requests on a messy title — too
-    // many at once makes LRCLib throttle and time out, dropping good matches.
-    const candidates = parseTitle(title).slice(0, 5);
-    // The duration of the playing media disambiguates same-titled recordings
-    // and enables LRCLib's signature match. 0 = unknown (live stream / not yet
-    // loaded), in which case the service worker simply ignores it.
+    const onPartial = (opts && opts.onPartial) || null;
+    // Lean fan-out (top 3 candidates; candidate #0 from the metadata is almost
+    // always right). Fewer requests = faster, especially when LRCLib is slow.
+    const candidates = parseTitle(title).slice(0, 3);
+    // The duration of the playing media disambiguates same-titled recordings.
+    // 0 = unknown (live stream / not yet loaded) — the SW then ignores it.
     const media = findMedia();
     const durationSec = media && isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
 
-    // Phase 1: fire all LRCLib-only lookups in parallel. The service worker
-    // returns a composite matchScore per candidate (lower = better artist +
-    // track + duration fit, with a synced bonus folded in). Pick the globally
-    // best-scoring match across ALL candidates — not merely the first candidate
-    // that happened to hit a synced row.
-    const phase1 = candidates.map((c) =>
-      sendFetchLyrics(c, { lrclibOnly: true, forceRefresh, durationSec })
-    );
-    const phase1Results = await Promise.all(phase1);
-    for (const r of phase1Results) {
-      if (r && r.invalidated) return r;
-    }
-    // The service worker folds a synced-bonus into matchScore, so a single
-    // ascending sort picks the best fit across all candidates.
-    const isSynced = (r) => !!r.syncedLyrics;
+    const isSynced = (r) => !!(r && r.syncedLyrics);
     const effScore = (r) =>
       r.matchScore != null ? r.matchScore : isSynced(r) ? -5 : 50;
-    const found = phase1Results.filter((r) => r && r.found);
-    if (found.length) {
-      found.sort((a, b) => effScore(a) - effScore(b));
-      return found[0];
-    }
+
+    // Phase 1: fire the LRCLib-only lookups in parallel, but DON'T wait for the
+    // slowest. Resolve the moment any synced result arrives, and surface the
+    // first plain result immediately via onPartial so something shows while the
+    // rest (and a possible synced upgrade) are still in flight.
+    const phase1 = await new Promise((resolve) => {
+      let settled = 0, done = false, bestPlain = null, shownPlain = false;
+      const finish = (r) => { if (!done) { done = true; resolve(r); } };
+      candidates.forEach((c) => {
+        sendFetchLyrics(c, { lrclibOnly: true, forceRefresh, durationSec })
+          .then((r) => {
+            settled++;
+            if (done) return;
+            if (r && r.invalidated) return finish(r);
+            if (r && r.found) {
+              if (isSynced(r)) {
+                if (onPartial) onPartial(r);   // show synced right away
+                return finish(r);              // synced = best; stop waiting
+              }
+              if (!bestPlain || effScore(r) < effScore(bestPlain)) bestPlain = r;
+              if (!shownPlain && onPartial) { shownPlain = true; onPartial(r); }
+            }
+            if (settled === candidates.length) finish(bestPlain || { found: false });
+          })
+          .catch(() => {
+            settled++;
+            if (settled === candidates.length) finish(bestPlain || { found: false });
+          });
+      });
+      if (candidates.length === 0) finish({ found: false });
+    });
+    if (phase1 && phase1.invalidated) return phase1;
+    if (phase1 && phase1.found) return phase1;
 
     // Phase 2: full chain (LRCLib already known to miss, so this is really
     // Lyrics.ovh + Genius) on the cleanest candidate. skipLrclib avoids a
@@ -516,6 +529,13 @@
     const normalizedKey = cleanTitle(title);
     if (!normalizedKey) return;
     if (!forceRefresh && normalizedKey === lastFetchedKey) return;
+    // Only the FOREGROUND tab fetches. Background tabs (other YouTube tabs,
+    // auto-advancing radio playlists, etc.) would each fire their own lyric
+    // lookups and flood the shared lrclib request queue — starving the tab you
+    // are actually viewing (observed: lrclib waits growing to 40s+). The
+    // visibilitychange listener re-fetches when this tab is brought to front.
+    // lastFetchedKey is left unset here so a hidden tab re-fetches once visible.
+    if (document.visibilityState !== "visible") return;
     lastFetchedKey = normalizedKey;
 
     const myGen = ++loadGeneration;
@@ -548,73 +568,57 @@
       setStatus(statusText);
     };
 
-    // 1. LRCLib
-    const lrclibResult = await fetchLyrics(title, { forceRefresh });
+    // Commit an LRCLib / lyrics.ovh / Genius result (synced preferred). Called
+    // BOTH progressively as candidates resolve (via onPartial) and for the final
+    // result, so the first plain shows instantly then upgrades to synced.
+    const commitLrclib = (r) => {
+      if (isStale() || !r || !r.found) return false;
+      const meta = {
+        trackName: r.trackName,
+        artistName: r.artistName,
+        source: r.source,
+        syncedLyrics: r.syncedLyrics || null,
+        plainLyrics: r.plainLyrics || null,
+      };
+      if (r.syncedLyrics) {
+        const lines = parseLRC(r.syncedLyrics);
+        if (lines.length > 0) {
+          const label = r.source === "lrclib" ? "LRCLib (synced)" : `${r.source || "synced"} (synced)`;
+          commitSynced(lines, label, r.alternatives, meta);
+          return true;
+        }
+      }
+      if (r.plainLyrics) {
+        const label = r.source === "genius" ? "Genius (unsynced)"
+          : r.source === "lyrics.ovh" ? "Lyrics.ovh (unsynced)"
+          : "LRCLib (unsynced)";
+        commitPlain(r.plainLyrics, label, r.alternatives, meta);
+        return true;
+      }
+      return false;
+    };
+
+    // 1. LRCLib (+ lyrics.ovh / Genius fallback in the SW), streamed in as the
+    //    candidates resolve.
+    stopDOMCaptionScraper(); // drop any prior on-screen-caption scraper
+    const lrclibResult = await fetchLyrics(title, { forceRefresh, onPartial: commitLrclib });
     if (isStale()) return;
     if (lrclibResult.invalidated) {
       setStatus("Extension was reloaded — please refresh this tab");
       return;
     }
-    const lrclibMeta = lrclibResult.found ? {
-      trackName: lrclibResult.trackName,
-      artistName: lrclibResult.artistName,
-      source: lrclibResult.source,
-      syncedLyrics: lrclibResult.syncedLyrics || null,
-      plainLyrics: lrclibResult.plainLyrics || null,
-    } : null;
+    if (commitLrclib(lrclibResult)) return;   // got real text lyrics — done
 
-    if (lrclibResult.found && lrclibResult.syncedLyrics) {
-      const lines = parseLRC(lrclibResult.syncedLyrics);
-      if (lines.length > 0) {
-        const label = lrclibResult.source === "lrclib" ? "LRCLib (synced)" : `${lrclibResult.source || "synced"} (synced)`;
-        commitSynced(lines, label, lrclibResult.alternatives, lrclibMeta);
-        return;
-      }
-    }
-
-    // 2. YouTube captions (via timedtext API)
-    stopDOMCaptionScraper(); // stop any prior DOM scraper when starting fresh
-    if (isStale()) return;
-    try {
-      const captionLines = await extractYouTubeCaptions();
-      if (isStale()) return;
-      if (captionLines && captionLines.length > 0) {
-        commitSynced(captionLines, "YouTube captions (synced)", [], {
-          trackName: cleanTitle(document.title),
-          artistName: "",
-          source: "yt-captions",
-          syncedLines: captionLines,
-        });
-        return;
-      }
-    } catch (e) {
-      console.warn("Karafilt: caption extraction failed", e);
-    }
-
-    if (isStale()) return;
-
-    // 3. DOM-scraped on-screen captions (when API refuses to serve the data,
-    //    this captures what's actually rendered as the song plays)
+    // 2. LAST resort only (no text lyrics from any source): scrape the player's
+    //    on-screen captions. Gated behind the text sources so it can never
+    //    override real lyrics with YouTube's auto-captions.
     if (isYouTube()) {
       const onScreen = findYouTubeCaptionText();
       if (onScreen) {
-        // Captions are visible on the player — start progressive capture
         startDOMCaptionScraper();
         setStatus("YouTube on-screen captions (capturing...)");
-        // Don't return — also fall through to plainLyrics fallbacks so something shows immediately
+        return;
       }
-    }
-
-    // 4. Plain lyrics from LRCLib / lyrics.ovh / Genius (the chained fallbacks
-    //    in the service worker), labelled by the actual source that returned them.
-    if (lrclibResult.found && lrclibResult.plainLyrics) {
-      const label = lrclibResult.source === "genius"
-        ? "Genius (unsynced)"
-        : lrclibResult.source === "lyrics.ovh"
-          ? "Lyrics.ovh (unsynced)"
-          : "LRCLib (unsynced)";
-      commitPlain(lrclibResult.plainLyrics, label, lrclibResult.alternatives, lrclibMeta);
-      return;
     }
 
     if (!hadPriorLyrics && !domScraperActive) setStatus("No lyrics found for this song");
@@ -851,6 +855,13 @@
       watchUrlChanges();
       watchTitleChanges();
       watchMediaSourceChanges();
+      // Re-fetch when this tab is brought to the foreground (fetching is gated
+      // to the visible tab — see loadLyricsForCurrentSong).
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && showLyrics) {
+          loadLyricsForCurrentSong();
+        }
+      });
       watchForMedia(() => {
         console.log("[KFL-CS] media found via watchForMedia, showLyrics=", showLyrics);
         if (showLyrics) {
