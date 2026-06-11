@@ -79,7 +79,11 @@ Legend: 🔑 secret/env · 🗄️ database · ⚙️ dashboard/config · 🚀 d
 - [ ] 🧾 **Register the business** (Serbian *preduzetnik* on *paušal*) and open a
       **Payoneer** account before taking real payments; hire a Serbian accountant; set up
       compliant **FX repatriation** (see `website/docs/MONETIZATION.md`).
-- [ ] 🚀 Submit the extension to the **Chrome Web Store**.
+- [ ] 🚀 Submit the extension to the **Chrome Web Store**: build the zip with
+      `scripts/package.sh` (strips the dev-only localhost CSP entries), then use
+      the ready-made listing copy + permission justifications in
+      `docs/STORE_LISTING.md`. Still manual: screenshots, promo tile, the $5
+      developer account, and a live `https://karafilt.com/privacy`.
 
 ---
 

@@ -4,6 +4,10 @@ importScripts("shared/song-match.js");
 const SM = self.KarafiltSongMatch;
 const { normalizeForMatch, levenshtein, fuzzyTrackMatch } = SM;
 
+// Set to true for verbose console logging during development.
+const KF_DEBUG = false;
+const dbg = (...args) => { if (KF_DEBUG) dbg(...args); };
+
 let offscreenReady = false;
 let currentMode = "stft";
 let capturedTabId = null;
@@ -511,7 +515,7 @@ async function fetchFromLRCLib(artist, track, opts) {
   if (!skipLrclib) parts.push(`lrclib ${Math.round(lrclibMs)}ms`);
   if (ovhMs) parts.push(`ovh ${Math.round(ovhMs)}ms`);
   if (geniusMs) parts.push(`genius ${Math.round(geniusMs)}ms`);
-  console.log(
+  dbg(
     `[SW] lyrics: ${result.found ? `${result.source} hit` : "miss"} in ${totalMs}ms` +
       (parts.length ? ` (${parts.join(", ")})` : "")
   );
@@ -552,12 +556,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
-  console.log("[SW] received message:", message.type, "from:", sender.url || "unknown");
+  dbg("[SW] received message:", message.type, "from:", sender.url || "unknown");
 
   switch (message.type) {
     case "START_CAPTURE":
       if (message.mode) currentMode = message.mode;
-      console.log("[SW] START_CAPTURE mode:", currentMode, "tabId:", message.tabId);
+      dbg("[SW] START_CAPTURE mode:", currentMode, "tabId:", message.tabId);
       handleStartCapture(message.tabId, message.aiModel, message.streamId).then((result) => {
         // Broadcast capture state so popup AND side panel both reflect it.
         if (result && result.success) {
@@ -569,7 +573,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "START_CAPTURE_DISPLAY_MEDIA":
       if (message.mode) currentMode = message.mode;
-      console.log("[SW] START_CAPTURE_DISPLAY_MEDIA mode:", currentMode, "tabId:", message.tabId);
+      dbg("[SW] START_CAPTURE_DISPLAY_MEDIA mode:", currentMode, "tabId:", message.tabId);
       handleStartCaptureViaDisplayMedia(message.tabId, message.aiModel).then((result) => {
         if (result && result.success) {
           chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
@@ -579,7 +583,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true; // async response
 
     case "STOP_CAPTURE":
-      console.log("[SW] STOP_CAPTURE received, forwarding to offscreen");
+      dbg("[SW] STOP_CAPTURE received, forwarding to offscreen");
       capturedTabId = null;
       capturedTabUrl = null;
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -652,7 +656,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         await ensureOffscreenDocument();
         const settings = await chrome.storage.local.get({
-          serverUrl: "ws://localhost:9876",
+          serverUrl: "",
           apiKey: "",
         });
         chrome.runtime.sendMessage({
@@ -677,7 +681,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       const oldUrl = new URL(capturedTabUrl);
       const newUrl = new URL(changeInfo.url);
       if (oldUrl.origin + oldUrl.pathname !== newUrl.origin + newUrl.pathname) {
-        console.log("Tab navigated away, stopping capture:", changeInfo.url);
+        dbg("Tab navigated away, stopping capture:", changeInfo.url);
         capturedTabId = null;
         capturedTabUrl = null;
         chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -711,13 +715,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // ── Phase 5: Pro account / filter-token gating ──────────────────────────────
 // When a Website URL is configured AND an AI mode is requested, fetch a
 // short-lived filter token from the website and use it as the backend auth
-// token. Empty websiteUrl = disabled → the extension behaves exactly as before.
+// token. Defaults to the production site; clearing the field in Settings
+// disables gating entirely (local/self-hosted use — static apiKey only).
+// Keep the default in sync with DEFAULTS.websiteUrl in shared/controls-bindings.js.
 function isAIMode(m) {
   return m === "ai" || m === "ai2";
 }
 
 async function getFilterToken() {
-  const { websiteUrl } = await chrome.storage.local.get({ websiteUrl: "" });
+  const { websiteUrl } = await chrome.storage.local.get({ websiteUrl: "https://karafilt.com" });
   const base = (websiteUrl || "").trim().replace(/\/+$/, "");
   if (!base) return { disabled: true };
   try {
@@ -782,7 +788,7 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
     const tab = await chrome.tabs.get(tabId);
     await ensureOffscreenDocument();
     const settings = await chrome.storage.local.get({
-      serverUrl: "ws://localhost:9876",
+      serverUrl: "",
       apiKey: "",
     });
 
@@ -796,7 +802,7 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
 
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
-    console.log("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode, "aiModel:", aiModel);
+    dbg("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode, "aiModel:", aiModel);
     chrome.runtime.sendMessage({
       type: "START_VIA_DISPLAY_MEDIA",
       mode: currentMode,
@@ -823,14 +829,14 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
     }
 
     const tab = await chrome.tabs.get(tabId);
-    console.log("[SW] tab URL:", tab.url);
+    dbg("[SW] tab URL:", tab.url);
 
     await ensureOffscreenDocument();
-    console.log("[SW] offscreen document ready");
+    dbg("[SW] offscreen document ready");
 
     // Push current settings to the offscreen document (it can't access chrome.storage)
     const settings = await chrome.storage.local.get({
-      serverUrl: "ws://localhost:9876",
+      serverUrl: "",
       apiKey: "",
     });
 
@@ -852,13 +858,13 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
     const streamId = providedStreamId || await chrome.tabCapture.getMediaStreamId({
       targetTabId: tabId,
     });
-    console.log("[SW] got stream ID:", streamId, providedStreamId ? "(from caller)" : "(fetched in SW)");
+    dbg("[SW] got stream ID:", streamId, providedStreamId ? "(from caller)" : "(fetched in SW)");
 
     // Send stream ID along with current mode so it's applied after capture starts
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
 
-    console.log("[SW] sending STREAM_READY, mode:", currentMode, "aiModel:", aiModel);
+    dbg("[SW] sending STREAM_READY, mode:", currentMode, "aiModel:", aiModel);
     chrome.runtime.sendMessage({
       type: "STREAM_READY",
       streamId: streamId,

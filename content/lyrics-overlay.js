@@ -10,6 +10,11 @@
   if (window.__karaokeFilterLyricsLoaded) return;
   window.__karaokeFilterLyricsLoaded = true;
 
+  // Set to true for verbose console logging during development. This script
+  // runs in every page's console, so it must stay quiet in production.
+  const KF_DEBUG = false;
+  const dbg = (...args) => { if (KF_DEBUG) dbg(...args); };
+
   // ─── Feature flags ──────────────────────────────────────────────────────
   // YouTube caption extraction is disabled: it requires a MAIN-world script
   // that intercepts YouTube's own timedtext fetches, which sits in a gray area
@@ -480,7 +485,7 @@
     if (!media) {
       publishPlaybackSkipReasons.noMedia++;
       if (publishPlaybackCount++ < 5 || publishPlaybackCount % 50 === 0) {
-        console.log("[KFL-CS] publishPlaybackTime: no media element found", publishPlaybackSkipReasons);
+        dbg("[KFL-CS] publishPlaybackTime: no media element found", publishPlaybackSkipReasons);
       }
       return;
     }
@@ -490,7 +495,7 @@
     }
     publishPlaybackSkipReasons.ok++;
     if (publishPlaybackCount < 5 || publishPlaybackCount % 50 === 0) {
-      console.log(`[KFL-CS] publishPlaybackTime ok t=${media.currentTime.toFixed(2)} paused=${media.paused}`, publishPlaybackSkipReasons);
+      dbg(`[KFL-CS] publishPlaybackTime ok t=${media.currentTime.toFixed(2)} paused=${media.paused}`, publishPlaybackSkipReasons);
     }
     publishPlaybackCount++;
     safeSendMessage({
@@ -503,16 +508,16 @@
 
   function startPlaybackTicker() {
     if (playbackTickerId != null) {
-      console.log("[KFL-CS] startPlaybackTicker called but already running");
+      dbg("[KFL-CS] startPlaybackTicker called but already running");
       return;
     }
-    console.log("[KFL-CS] startPlaybackTicker — interval starting at", PLAYBACK_TICK_MS, "ms");
+    dbg("[KFL-CS] startPlaybackTicker — interval starting at", PLAYBACK_TICK_MS, "ms");
     playbackTickerId = setInterval(publishPlaybackTime, PLAYBACK_TICK_MS);
   }
 
   function stopPlaybackTicker() {
     if (playbackTickerId != null) {
-      console.log("[KFL-CS] stopPlaybackTicker — interval stopping");
+      dbg("[KFL-CS] stopPlaybackTicker — interval stopping");
       clearInterval(playbackTickerId);
       playbackTickerId = null;
     }
@@ -672,7 +677,7 @@
     const key = getSongKey();
     if (key === lastSongKey) return;
     lastSongKey = key;
-    console.log("[KFL-CS] song change via", reason, "→ key=", key);
+    dbg("[KFL-CS] song change via", reason, "→ key=", key);
 
     parsedLines = [];
     plainLyrics = null;
@@ -831,7 +836,7 @@
       try {
         const newTime = Math.max(0, m.currentTime + delta);
         m.currentTime = newTime;
-        console.log(`[KFL-CS] AI sync seek: ${delta.toFixed(2)}s → currentTime=${newTime.toFixed(2)}s`);
+        dbg(`[KFL-CS] AI sync seek: ${delta.toFixed(2)}s → currentTime=${newTime.toFixed(2)}s`);
       } catch {
         // currentTime is settable only when readyState ≥ 1 — ignore otherwise.
       }
@@ -839,19 +844,19 @@
   });
 
   // --- Init ---
-  console.log("[KFL-CS] content script loaded for", location.href);
+  dbg("[KFL-CS] content script loaded for", location.href);
   if (!isExtensionValid()) {
-    console.log("[KFL-CS] extension invalid at load — bailing");
+    dbg("[KFL-CS] extension invalid at load — bailing");
     return;
   }
   try {
     chrome.storage.local.get({ showLyrics: true }, (s) => {
       if (chrome.runtime.lastError) {
-        console.log("[KFL-CS] storage error:", chrome.runtime.lastError);
+        dbg("[KFL-CS] storage error:", chrome.runtime.lastError);
         return;
       }
       showLyrics = s.showLyrics;
-      console.log("[KFL-CS] init: showLyrics =", showLyrics);
+      dbg("[KFL-CS] init: showLyrics =", showLyrics);
       watchUrlChanges();
       watchTitleChanges();
       watchMediaSourceChanges();
@@ -863,7 +868,7 @@
         }
       });
       watchForMedia(() => {
-        console.log("[KFL-CS] media found via watchForMedia, showLyrics=", showLyrics);
+        dbg("[KFL-CS] media found via watchForMedia, showLyrics=", showLyrics);
         if (showLyrics) {
           maybeRefresh("init");
           startPlaybackTicker();
@@ -871,6 +876,6 @@
       });
     });
   } catch (e) {
-    console.log("[KFL-CS] init threw:", e);
+    dbg("[KFL-CS] init threw:", e);
   }
 })();

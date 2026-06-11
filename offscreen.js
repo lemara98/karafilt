@@ -1,3 +1,7 @@
+// Set to true for verbose console logging during development.
+const KF_DEBUG = false;
+const dbg = (...args) => { if (KF_DEBUG) dbg(...args); };
+
 let audioContext = null;
 let workletNode = null;
 let sourceNode = null;
@@ -6,7 +10,9 @@ let ws = null;
 let currentMode = "stft";
 let currentAIModel = "htdemucs";
 let captureReady = false;
-let serverUrl = "ws://localhost:9876";
+// AI server address. Empty until the service worker pushes the user's
+// configured Server URL from storage (offscreen docs can't read storage).
+let serverUrl = "";
 let apiKey = "";
 let aiChunksSent = 0;
 
@@ -86,26 +92,26 @@ function emitZeroLag() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("[OFFSCREEN] received message:", message.type, "from:", sender.url || sender.id || "unknown");
+  dbg("[OFFSCREEN] received message:", message.type, "from:", sender.url || sender.id || "unknown");
   if (sender.tab) return;
 
   switch (message.type) {
     case "STREAM_READY":
-      console.log("[OFFSCREEN] STREAM_READY received, mode:", message.mode, "aiModel:", message.aiModel);
+      dbg("[OFFSCREEN] STREAM_READY received, mode:", message.mode, "aiModel:", message.aiModel);
       if (message.aiModel) currentAIModel = message.aiModel;
       if (message.serverUrl) serverUrl = message.serverUrl;
       if (typeof message.apiKey === "string") apiKey = message.apiKey;
       startCapture(message.streamId, message.mode || "stft");
       break;
     case "START_VIA_DISPLAY_MEDIA":
-      console.log("[OFFSCREEN] START_VIA_DISPLAY_MEDIA received, mode:", message.mode);
+      dbg("[OFFSCREEN] START_VIA_DISPLAY_MEDIA received, mode:", message.mode);
       if (message.aiModel) currentAIModel = message.aiModel;
       if (message.serverUrl) serverUrl = message.serverUrl;
       if (typeof message.apiKey === "string") apiKey = message.apiKey;
       startCaptureViaDisplayMedia(message.mode || "stft");
       break;
     case "STOP_CAPTURE":
-      console.log("[OFFSCREEN] STOP_CAPTURE received");
+      dbg("[OFFSCREEN] STOP_CAPTURE received");
       stopCapture();
       break;
     case "SET_MIX":
@@ -198,14 +204,14 @@ async function startCaptureFromMediaStream(stream, initialMode) {
   aiGainNode.connect(audioContext.destination);
 
   captureReady = true;
-  console.log(`[OFFSCREEN] capture started, sample rate: ${audioContext.sampleRate}, about to switchMode("${initialMode}")`);
+  dbg(`[OFFSCREEN] capture started, sample rate: ${audioContext.sampleRate}, about to switchMode("${initialMode}")`);
 
   switchMode(initialMode);
-  console.log(`[OFFSCREEN] switchMode complete, ws=${ws ? ws.readyState : "null"}, currentMode=${currentMode}`);
+  dbg(`[OFFSCREEN] switchMode complete, ws=${ws ? ws.readyState : "null"}, currentMode=${currentMode}`);
 }
 
 async function startCapture(streamId, initialMode) {
-  console.log(`[OFFSCREEN] startCapture called, mode=${initialMode}, streamId=${streamId}`);
+  dbg(`[OFFSCREEN] startCapture called, mode=${initialMode}, streamId=${streamId}`);
   try {
     cleanupAudio();
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -231,7 +237,7 @@ async function startCapture(streamId, initialMode) {
 // the side-panel button click that initiated this flow being recent
 // enough to satisfy the transient-activation check).
 async function startCaptureViaDisplayMedia(initialMode) {
-  console.log(`[OFFSCREEN] startCaptureViaDisplayMedia called, mode=${initialMode}`);
+  dbg(`[OFFSCREEN] startCaptureViaDisplayMedia called, mode=${initialMode}`);
   try {
     cleanupAudio();
     const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -264,7 +270,7 @@ function isAIMode(mode) {
 
 function switchMode(mode) {
   const wasAI = isAIMode(currentMode);
-  console.log(`Karafilt: switchMode "${currentMode}" → "${mode}" (captureReady=${captureReady})`);
+  dbg(`Karafilt: switchMode "${currentMode}" → "${mode}" (captureReady=${captureReady})`);
   currentMode = mode;
 
   // Always keep the worklet running with STFT for audio output
@@ -301,6 +307,13 @@ function openWebSocket() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
   closeWebSocket();
 
+  // No AI server configured (Settings → Server URL). Stay on the STFT
+  // preview path; the UI explains how to enable AI.
+  if (!serverUrl) {
+    sendAIStatus("no_server");
+    return;
+  }
+
   aiRecordBuffers = [[], []];
   aiRecordedSamples = 0;
   aiOverlapBuffers = [null, null];
@@ -308,12 +321,19 @@ function openWebSocket() {
   aiPlaying = false;
   aiChunksReceived = 0;
 
-  console.log(`Karafilt: connecting to backend at ${serverUrl}...`);
-  ws = new WebSocket(serverUrl);
+  dbg(`Karafilt: connecting to backend at ${serverUrl}...`);
+  try {
+    ws = new WebSocket(serverUrl);
+  } catch (e) {
+    // Malformed URL typed into settings — surface it instead of throwing.
+    ws = null;
+    sendAIStatus("error");
+    return;
+  }
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
-    console.log(`Karafilt: connected to backend (mode=${currentMode}, model=${currentAIModel}, captureReady=${captureReady})`);
+    dbg(`Karafilt: connected to backend (mode=${currentMode}, model=${currentAIModel}, captureReady=${captureReady})`);
     sendAIStatus("recording");
     // Authenticate if an API key is configured
     if (apiKey) {
@@ -365,7 +385,7 @@ function openWebSocket() {
 
     aiPlaybackQueue.push({ left, right, sampleRate });
     aiChunksReceived++;
-    console.log(`Received ${numSamples} processed samples from Demucs (chunk #${aiChunksReceived})`);
+    dbg(`Received ${numSamples} processed samples from Demucs (chunk #${aiChunksReceived})`);
 
     if (aiChunksReceived < AI_PREBUFFER_CHUNKS) {
       sendAIStatus("buffering", { received: aiChunksReceived, needed: AI_PREBUFFER_CHUNKS });
@@ -407,7 +427,7 @@ function openWebSocket() {
   };
 
   ws.onclose = (event) => {
-    console.log("Karafilt: WebSocket closed, code:", event.code, "reason:", event.reason);
+    dbg("Karafilt: WebSocket closed, code:", event.code, "reason:", event.reason);
     // If unexpected close while in AI mode, fall back to STFT preview
     if (isAIMode(currentMode) && workletGainNode) {
       workletGainNode.gain.value = 1.0;
@@ -420,8 +440,7 @@ function openWebSocket() {
 
 function closeWebSocket() {
   if (ws) {
-    console.log("[OFFSCREEN] closeWebSocket called, ws.readyState:", ws.readyState);
-    console.trace("[OFFSCREEN] closeWebSocket trace");
+    dbg("[OFFSCREEN] closeWebSocket called, ws.readyState:", ws.readyState);
     ws.onclose = null;
     ws.close();
     ws = null;
@@ -439,7 +458,7 @@ function closeWebSocket() {
 function onAIAudioProcess(e) {
   if (!isAIMode(currentMode)) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.log("Karafilt: AI audio process skipped — WebSocket not open (state:", ws ? ws.readyState : "null", ")");
+    dbg("Karafilt: AI audio process skipped — WebSocket not open (state:", ws ? ws.readyState : "null", ")");
     return;
   }
 
@@ -464,12 +483,12 @@ function onAIAudioProcess(e) {
 
 function sendAIChunk() {
   if (!ws || ws.readyState !== WebSocket.OPEN || !audioContext) {
-    console.log("Karafilt: sendAIChunk skipped — ws:", ws ? ws.readyState : "null", "audioContext:", !!audioContext);
+    dbg("Karafilt: sendAIChunk skipped — ws:", ws ? ws.readyState : "null", "audioContext:", !!audioContext);
     return;
   }
 
   const totalSamples = aiRecordedSamples;
-  console.log(`Karafilt: sending AI chunk — ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s)`);
+  dbg(`Karafilt: sending AI chunk — ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s)`);
   const left = new Float32Array(totalSamples);
   const right = new Float32Array(totalSamples);
   let offset = 0;
@@ -496,7 +515,7 @@ function sendAIChunk() {
 
   ws.send(packet.buffer);
   aiChunksSent++;
-  console.log(`Sent ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s) to Demucs`);
+  dbg(`Sent ${totalSamples} samples (${(totalSamples / audioContext.sampleRate).toFixed(1)}s) to Demucs`);
   if (aiChunksReceived < AI_PREBUFFER_CHUNKS) {
     sendAIStatus("processing", { sent: aiChunksSent, received: aiChunksReceived });
   }
@@ -583,6 +602,10 @@ function fetchModelsFromServer() {
       resolve(result);
     };
 
+    if (!serverUrl) {
+      done({ success: false, error: "No server configured" });
+      return;
+    }
     let tmpWs;
     try {
       tmpWs = new WebSocket(serverUrl);
@@ -625,8 +648,7 @@ function fetchModelsFromServer() {
 }
 
 function stopCapture() {
-  console.log("Karafilt: stopCapture called");
-  console.trace("stopCapture trace");
+  dbg("Karafilt: stopCapture called");
   closeWebSocket();
   cleanupAudio();
   sendAIStatus("idle");

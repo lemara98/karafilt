@@ -21,15 +21,16 @@
     stft_preview: "STFT Preview — waiting for AI...",
     fallback: "STFT Fallback — server disconnected",
     error: "Connection error",
+    no_server: "No AI server configured — set one in Settings",
   };
 
   const DEFAULTS = {
     mode: "stft",
     mix: 100,
     aiModel: "htdemucs",
-    serverUrl: "ws://localhost:9876",
+    serverUrl: "",
     apiKey: "",
-    websiteUrl: "",
+    websiteUrl: "https://karafilt.com",
   };
 
   function isAIMode(mode) {
@@ -69,7 +70,9 @@
     // ── UI helpers ────────────────────────────────────────────────────────
     function updateAIStatus(status, detail) {
       if (!has(els, "aiStatusEl")) return;
-      const label = AI_STATUS_LABELS[status];
+      // "gated" carries its own message from the service worker (sign in /
+      // verify email / subscribe / trial ended) rather than a fixed label.
+      const label = status === "gated" ? detail : AI_STATUS_LABELS[status];
       if (!label) {
         els.aiStatusEl.style.display = "none";
         return;

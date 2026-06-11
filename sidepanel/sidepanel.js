@@ -1,3 +1,7 @@
+// Set to true for verbose console logging during development.
+const KF_DEBUG = false;
+const dbg = (...args) => { if (KF_DEBUG) console.log(...args); };
+
 const songTitleEl = document.getElementById("song-title");
 const sourceBadgeEl = document.getElementById("source-badge");
 const statusEl = document.getElementById("status");
@@ -418,7 +422,7 @@ function highlightLine(index) {
   const next = linesEl.querySelector(`.line[data-index="${index}"]`);
   if (next) {
     next.classList.add("active");
-    console.log("[KFL-Sidepanel] active line set to", index, "→", next.textContent.slice(0, 60));
+    dbg("[KFL-Sidepanel] active line set to", index, "→", next.textContent.slice(0, 60));
     if (karaokeMode) {
       // Karaoke mode: swap the visible 3-line page only at boundaries.
       applyKaraokePage(index);
@@ -469,7 +473,7 @@ function syncToPlaybackTime(t) {
     }
   }
   if (syncLogCount++ < 5) {
-    console.log(
+    dbg(
       `[KFL-Sidepanel] sync t=${adjusted.toFixed(2)}s (raw=${t.toFixed(2)}, lag=${aiLagSeconds.toFixed(2)}), lines=${parsedLines.length}, ` +
       `firstTime=${parsedLines[0]?.time?.toFixed(2)}, lastTime=${parsedLines[parsedLines.length - 1]?.time?.toFixed(2)}, ` +
       `found=${found}`
@@ -793,22 +797,3 @@ if (spToggleBtn && window.bindKaraokeControls) {
 
 // --- Init ---
 bindToActiveTab();
-
-// Temporary debug heartbeat — prints state every 2s into the side panel's console
-// so we can diagnose why the highlight isn't appearing.
-setInterval(() => {
-  console.log("[KFL-DEBUG]", JSON.stringify({
-    domLines: document.querySelectorAll(".line").length,
-    activeLines: document.querySelectorAll(".line.active").length,
-    parsedLines: parsedLines.length,
-    plainLyrics: !!plainLyrics,
-    lastPlaybackTime: lastPlaybackTime,
-    lastRenderedCount,
-    lastRenderedMode,
-    activeTabId,
-    hasMedia,
-    currentLineIndex,
-    firstLineTime: parsedLines[0]?.time,
-    lastLineTime: parsedLines[parsedLines.length - 1]?.time,
-  }));
-}, 2000);

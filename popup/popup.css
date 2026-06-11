@@ -491,6 +491,14 @@ input[type="range"]::-webkit-slider-thumb:hover {
   box-shadow: 0 0 6px rgba(248, 113, 113, 0.4);
 }
 
+/* Account-gated (sign in / subscribe / trial ended) and missing-server-URL
+   states: amber — needs user action, but nothing is broken. */
+.ai-status.gated .ai-status-dot,
+.ai-status.no_server .ai-status-dot {
+  background: #facc15;
+  box-shadow: 0 0 6px rgba(250, 204, 21, 0.4);
+}
+
 @keyframes ai-dot-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
