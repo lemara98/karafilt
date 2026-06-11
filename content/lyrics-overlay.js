@@ -13,7 +13,7 @@
   // Set to true for verbose console logging during development. This script
   // runs in every page's console, so it must stay quiet in production.
   const KF_DEBUG = false;
-  const dbg = (...args) => { if (KF_DEBUG) dbg(...args); };
+  const dbg = (...args) => { if (KF_DEBUG) console.log(...args); };
 
   // ─── Feature flags ──────────────────────────────────────────────────────
   // YouTube caption extraction is disabled: it requires a MAIN-world script

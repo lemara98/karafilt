@@ -46,6 +46,10 @@
 
   window.bindKaraokeControls = function bindKaraokeControls(els) {
     let isActive = false;
+    // Surfaces pinned to a specific tab (the side panel) supply els.getTabId
+    // so Start/Stop always target that tab. Without it, fall back to tracking
+    // the active tab (legacy popup behaviour).
+    const getFixedTabId = typeof els.getTabId === "function" ? els.getTabId : null;
     // Cached active tab id, refreshed on tab activation. Having this
     // synchronously available lets the click handler call
     // chrome.tabCapture.getMediaStreamId without any preceding await — Chrome
@@ -61,11 +65,13 @@
         cachedTabId = null;
       }
     }
-    refreshTabId();
-    chrome.tabs.onActivated.addListener(refreshTabId);
-    chrome.tabs.onUpdated.addListener((_id, info) => {
-      if (info.status === "complete") refreshTabId();
-    });
+    if (!getFixedTabId) {
+      refreshTabId();
+      chrome.tabs.onActivated.addListener(refreshTabId);
+      chrome.tabs.onUpdated.addListener((_id, info) => {
+        if (info.status === "complete") refreshTabId();
+      });
+    }
 
     // ── UI helpers ────────────────────────────────────────────────────────
     function updateAIStatus(status, detail) {
@@ -162,7 +168,7 @@
     if (has(els, "toggleBtn")) {
       els.toggleBtn.addEventListener("click", async () => {
         if (!isActive) {
-          let tabId = cachedTabId;
+          let tabId = getFixedTabId ? getFixedTabId() : cachedTabId;
           if (tabId == null) {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             tabId = tab && tab.id != null ? tab.id : null;

@@ -31,7 +31,6 @@ FILES=(
   LICENSE
 )
 DIRS=(
-  popup
   sidepanel
   shared
   icons
@@ -39,6 +38,11 @@ DIRS=(
 
 for f in "${FILES[@]}"; do cp "$f" "$STAGE/"; done
 for d in "${DIRS[@]}"; do cp -r "$d" "$STAGE/"; done
+# sidepanel.html imports ../popup/popup.css (shared styles). popup.html/js are
+# an unreachable legacy surface (no default_popup in the manifest) — ship the
+# stylesheet only.
+mkdir -p "$STAGE/popup"
+cp popup/popup.css "$STAGE/popup/"
 # Only the manifest-declared content script. yt-captions-injector.js stays
 # out: it's the disabled MAIN-world caption interceptor (see
 # ENABLE_YT_CAPTION_EXTRACTION in lyrics-overlay.js) — dead code that would

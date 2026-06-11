@@ -582,3 +582,74 @@ body { width: 100% !important; }
 
 /* The countdown overlay is fixed-positioned via popup.css and covers the
    whole panel viewport — that's intentional so the user sees it clearly. */
+
+/* ── Account chip (karafilt.com session) ──────────────────────────────────
+   Lives in the settings row: chip on the left, Settings button on the right.
+   popup.css sets .settings-row to justify-content: flex-end; space-between
+   keeps the button right-aligned when the chip is hidden too (it's the only
+   visible child then). */
+.settings-row {
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 62%;
+  padding: 3px 9px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.account-chip:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.account-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8b7cff, #b46cff);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.account-chip.signed-out .account-avatar {
+  background: rgba(255, 255, 255, 0.1);
+  color: #8b90b0;
+}
+
+.account-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.account-email {
+  font-size: 10.5px;
+  color: #d8d4f2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-plan {
+  font-size: 9.5px;
+  color: #8b90b0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

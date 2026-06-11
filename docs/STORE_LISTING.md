@@ -4,29 +4,51 @@ Everything to paste into the CWS developer dashboard. Build the zip with
 `scripts/package.sh` (output: `dist/karafilt-<version>.zip`).
 
 Still needed before submitting (manual):
-- [ ] 3–5 screenshots, 1280×800 — see the shot list below
+- [ ] 3–5 screenshots, 1280×800 — see the capture runbook below
 - [x] Small promo tile: `store-assets/promo-tile-440x280.png`
 - [x] Marquee (optional but used for feature placement): `store-assets/marquee-1400x560.png`
-- [ ] Privacy policy live at `https://karafilt.com/privacy` (page is written in
-      the website repo; needs the site deployed)
-- [ ] CWS developer account ($5 one-time)
+- [x] Privacy policy live at `https://karafilt.com/privacy` (incl. Vercel
+      Analytics disclosure; GA removed)
+- [x] CWS developer account
 
-## Screenshot shot list (1280×800)
+## Screenshot capture runbook (4 shots → exact 1280×800)
 
-The side panel is browser chrome, so DevTools can't capture it — take OS
-window screenshots and crop to 1280×800 (GIMP, or `convert in.png -crop
-1280x800+X+Y out.png`). Load the packaged build (`scripts/package.sh`, then
-load `dist/` contents unpacked) so what's shown is what ships.
+CWS requires exactly 1280×800 (or 640×400). Workflow: take ROUGH screenshots
+(any size, OS screenshot tool — the side panel is browser chrome, so DevTools
+can't capture it), drop them in `store-assets/raw/`, then ask Claude to
+crop/scale them to exact spec into `store-assets/`.
 
-1. **Hero:** YouTube music video playing + side panel showing synced lyrics
-   with the current line highlighted, filter running (status "Filtering").
-   Pick a song LRCLib has synced (most chart hits work).
-2. **Karaoke focus mode:** same song, focus mode on — the big 3-line page view.
-3. **Modes:** the mode dropdown open showing Spectral / Basic / AI Separation /
-   AI + Deep Clean, with the AI status badge visible.
-4. **Alternatives picker:** the "other matches" dropdown open, showing
-   multiple versions of a song (synced badges visible).
-5. **Popup (optional):** the compact popup with the vocal/instrumental mix slider.
+**Prep (5 min):**
+- Build + load what ships: `scripts/package.sh && unzip -o dist/karafilt-0.1.0.zip -d /tmp/karafilt-pkg`
+  → `chrome://extensions` → Load unpacked → `/tmp/karafilt-pkg`.
+- Use a CLEAN browser surface: fresh Chrome profile (or at least hide the
+  bookmarks bar, close other tabs) and a YouTube session that is **signed out
+  of Google** — your avatar/recommendations leak into shots otherwise.
+  YouTube dark theme matches the panel's dark UI nicely.
+- You're already signed in on karafilt.com, and the extension's default
+  Website URL points there — gating states are real. No GPU backend exists
+  yet, so do NOT start an AI mode in any shot (it would show "No AI server
+  configured"). Free Spectral mode is the one to show running.
+- Songs with reliable synced LRCLib lyrics: mainstream chart hits work —
+  e.g. The Weeknd "Blinding Lights", Adele "Someone Like You", Queen
+  "Bohemian Rhapsody". Verify the panel badge says "(synced)" before shooting.
+
+**The 4 shots** (with one-click start, just click the icon on the music tab —
+filtering and the panel come up together):
+1. **Hero:** YouTube music video playing + side panel with synced lyrics,
+   current line highlighted mid-song, filter running (Spectral; status
+   "Filtering"). This is the listing's first impression.
+2. **Karaoke focus mode:** same song, focus mode on — the big 3-line page view
+   with the active line highlighted.
+3. **Modes:** the mode dropdown open showing Spectral (Good) / Basic (Fast) /
+   AI Separation (Best) / AI + Deep Clean — communicates the free→Pro range
+   without starting AI.
+4. **Alternatives picker:** the "other matches" dropdown open on a song with
+   several versions (synced badges visible) — shows the user stays in control.
+
+**After capturing:** drop the raw files in `store-assets/raw/`, tell Claude
+which raw file maps to which shot, and the exact-size 1280×800 finals will be
+produced for upload.
 
 ---
 
@@ -49,9 +71,10 @@ load `dist/` contents unpacked) so what's shown is what ships.
 > and shows time-synced lyrics in the side panel so you can sing along.
 >
 > **How it works**
-> Click the Karafilt icon (or press Ctrl+Shift+K) on a tab playing music.
-> Karafilt captures the tab's audio, filters out the vocals in real time, and
-> looks up the song's lyrics automatically.
+> Click the Karafilt icon (or press Ctrl+Shift+K) on a tab playing music —
+> filtering starts immediately and the side panel opens with the song's
+> lyrics. The panel stays pinned to that tab until you filter another one,
+> so the rest of your browsing is untouched.
 >
 > **Features**
 > • Real-time vocal removal — no uploads, no waiting
@@ -116,7 +139,9 @@ to a server and receives *audio data* back — no code is fetched or executed.)
 - ❌ Personally identifiable information, health, financial, authentication,
   personal communications, location, web history, user activity — not collected.
   (Pro sign-in happens on karafilt.com, not in the extension; the extension only
-  presents the site's own session cookie when requesting a filter token.)
+  presents the site's own session cookie when requesting a filter token. The
+  side panel displays your account email/plan fetched from your own karafilt.com
+  session — shown to you only, never transmitted anywhere else.)
 
 **Certifications (tick all three):**
 - Not sold to third parties, outside of approved use cases

@@ -1,6 +1,6 @@
 // Set to true for verbose console logging during development.
 const KF_DEBUG = false;
-const dbg = (...args) => { if (KF_DEBUG) dbg(...args); };
+const dbg = (...args) => { if (KF_DEBUG) console.log(...args); };
 
 let audioContext = null;
 let workletNode = null;

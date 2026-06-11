@@ -18,30 +18,59 @@ Two services deploy independently. The only hard rule: the shared secrets
    to redirect URLs and set the Site URL to the production domain.
 4. In Paddle → Notifications: point the webhook to `https://<domain>/api/paddle/webhook`.
 
-## 2. Filtering backend (Python/Demucs → always-on GPU host)
-A dedicated GPU instance (RunPod / Vast.ai / Hetzner GPU) sized for concurrent
-*active* streams. The first run downloads the Demucs model (~1.5 GB).
-1. `cd backend && ./setup.sh` (or `pip install -r requirements.txt`).
-2. Set env:
-   - `FILTER_JWT_SECRET` (same value as the website)
-   - `USAGE_API_SECRET` (same value as the website)
-   - `KARAFILT_USAGE_URL` = `https://<domain>/api/usage`
-   - optional `KARAFILT_USAGE_INTERVAL` (default 30s), `--auth-token`
-3. Run `python server.py --device auto`. With `FILTER_JWT_SECRET` set, the server
-   requires a valid website-issued token per session and meters trial usage.
-4. **Terminate TLS** in front of it (Caddy/Nginx/Cloudflare) so the extension can
-   connect over **`wss://your-backend-host`** — browsers won't open `ws://` from an
-   `https://` page.
-5. Add that `wss://` host to the extension's CSP `connect-src` in `manifest.json`
-   (currently it allows `wss://*`, which already covers any host — tighten to your
-   specific host before a Web Store submission).
+## 2. Filtering backend (Python/Demucs → RunPod GPU pod)
+
+Runs as an **hourly RunPod pod**: stop it whenever there are no Pro users and
+pay nothing — the extension degrades gracefully to free WASM filtering while
+it's off. RunPod's HTTP proxy terminates TLS, so there is no domain or
+certificate to manage: exposing port 9876 yields a ready-made
+`wss://<podid>-9876.proxy.runpod.net` endpoint.
+
+**One-time image build** (or use the manual path below):
+```bash
+docker build -t ghcr.io/lemara98/karafilt-backend backend/
+docker login ghcr.io          # GitHub username + a token with write:packages
+docker push ghcr.io/lemara98/karafilt-backend
+```
+The image pre-bakes the htdemucs model (~1.5 GB) so pods serve immediately.
+
+**Create the pod** (RunPod → Pods → Deploy):
+- GPU: RTX A4000 / RTX 3090 class (~$0.17–0.31/hr) — htdemucs processes a 5 s
+  chunk in ~1 s on a 3090, so one pod handles several concurrent streams.
+- Container image: `ghcr.io/lemara98/karafilt-backend` (make the ghcr package
+  public, or add registry credentials in RunPod).
+- Expose **HTTP port 9876**; disk ≥ 20 GB.
+- Environment variables:
+  - `FILTER_JWT_SECRET` — same value as Vercel
+  - `USAGE_API_SECRET` — same value as Vercel
+  - `KARAFILT_USAGE_URL` = `https://karafilt.com/api/usage`
+  - optional: `KARAFILT_WORKERS` (default 4), `KARAFILT_USAGE_INTERVAL` (default 30 s)
+
+**Quick manual path** (first smoke test, no registry needed): deploy a stock
+`runpod/pytorch` pod, open its web terminal, copy the `backend/` folder over
+(or `git clone`), `pip install -r requirements.txt`, export the env vars, and
+run `python server.py --device auto` inside `tmux`.
+
+**Wire it to the website:** copy the pod's proxy address and set it in Vercel:
+`AI_SERVER_URL=wss://<podid>-9876.proxy.runpod.net`, then redeploy. The
+extension picks it up automatically via `/api/me` and `/api/filter-token` —
+no extension update needed when the pod (and its URL) changes.
+
+Notes:
+- The constant audio-chunk traffic keeps the RunPod proxy's idle timeout from
+  firing; the `websockets` server also pings every 20 s.
+- With `FILTER_JWT_SECRET` set, the server requires a valid website-issued
+  token per session and meters trial usage back to `/api/usage`.
 
 ## 3. Extension
-- In the extension settings, set **Website URL** to the production site so AI modes
-  fetch a filter token. The `serverUrl` (backend) setting should point at the
-  `wss://` backend.
-- Submit to the **Chrome Web Store** when ready (a tightened CSP and the privacy
-  policy at `/privacy` help review).
+- Defaults are production-ready: **Website URL** points at karafilt.com and the
+  **Server URL** comes from the website (`AI_SERVER_URL`). Users only touch
+  Settings to self-host (their own Server URL overrides the provisioned one).
+- The CSP keeps `connect-src wss://*` because the backend endpoint is
+  config-driven and self-hosting is supported; `scripts/package.sh` can pin a
+  specific host via `PROD_WS_HOST` if a stable domain is adopted later.
+- Submit to the **Chrome Web Store** when ready (the privacy policy at
+  `/privacy` helps review).
 
 ## Smoke test (production)
 1. Sign up on the live site → verify email → `/account` shows the trial.

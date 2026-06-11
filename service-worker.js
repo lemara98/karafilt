@@ -6,7 +6,7 @@ const { normalizeForMatch, levenshtein, fuzzyTrackMatch } = SM;
 
 // Set to true for verbose console logging during development.
 const KF_DEBUG = false;
-const dbg = (...args) => { if (KF_DEBUG) dbg(...args); };
+const dbg = (...args) => { if (KF_DEBUG) console.log(...args); };
 
 let offscreenReady = false;
 let currentMode = "stft";
@@ -14,12 +14,61 @@ let capturedTabId = null;
 let capturedTabUrl = null;
 let currentAIStatus = { status: "idle", detail: null };
 
-// Icon click opens the side panel only — it does NOT auto-start capture.
-// Starting capture requires an explicit user action (Start button in Chrome,
-// or the Ctrl+Shift+K shortcut in any Chromium browser).
+// The side panel is PINNED to one tab at a time: disabled by default
+// everywhere, enabled only for the tab the user invoked Karafilt on (icon
+// click, Ctrl+Shift+K, or the context menu). Chrome then shows the panel only
+// on that tab — switching away hides it, switching back restores it. Both
+// calls run on every SW start so the defaults survive restarts (and clear the
+// openPanelOnActionClick behaviour persisted by older versions).
 chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((err) => console.error("[SW] setPanelBehavior failed:", err));
+  .setPanelBehavior({ openPanelOnActionClick: false })
+  .catch(() => {});
+chrome.sidePanel
+  .setOptions({ enabled: false })
+  .catch((err) => console.error("[SW] sidePanel default-disable failed:", err));
+
+// Pin the panel to a tab. Fire-and-forget: callers run inside a user gesture
+// and must not await before their own gesture-bound calls (sidePanel.open,
+// tabCapture.getMediaStreamId). Disables the previously bound tab so exactly
+// one tab owns the panel; boundTabId is kept in storage.session so the panel
+// page and SW restarts can recover it.
+function bindPanelToTab(tabId) {
+  chrome.sidePanel
+    .setOptions({ tabId, path: "sidepanel/sidepanel.html", enabled: true })
+    .catch((err) => console.error("[SW] sidePanel enable failed:", err));
+  chrome.storage.session.get({ boundTabId: null }, ({ boundTabId }) => {
+    if (boundTabId != null && boundTabId !== tabId) {
+      chrome.sidePanel
+        .setOptions({ tabId: boundTabId, enabled: false })
+        .catch(() => {});
+    }
+    chrome.storage.session.set({ boundTabId: tabId });
+  });
+}
+
+// Transient "can't filter here" feedback for ineligible tabs (chrome://, the
+// Web Store…) where no panel can open.
+function flashIneligibleBadge(tabId) {
+  chrome.action.setBadgeText({ text: "✕", tabId }).catch(() => {});
+  setTimeout(() => {
+    chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
+  }, 2000);
+}
+
+// Icon click — the main entry point: pin the panel to this tab, open it, and
+// start filtering in one click. Re-clicking on the bound tab toggles
+// filtering off (same semantics as Ctrl+Shift+K); the panel stays open. All
+// calls are issued synchronously so the click's user gesture covers both
+// sidePanel.open and tabCapture.getMediaStreamId.
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab || !tab.id || !tab.url || !/^https?:/.test(tab.url)) {
+    if (tab && tab.id) flashIneligibleBadge(tab.id);
+    return;
+  }
+  bindPanelToTab(tab.id);
+  chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  toggleCaptureForTab(tab);
+});
 
 // Toggle capture for a tab: stop if it's the currently-captured tab,
 // otherwise start a fresh capture. Called from chrome.commands.onCommand
@@ -89,7 +138,8 @@ chrome.runtime.onStartup.addListener(injectIntoOpenTabs);
 // to keep the user gesture intact.
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "toggle-filter") return;
-  if (tab && tab.id) {
+  if (tab && tab.id && tab.url && /^https?:/.test(tab.url)) {
+    bindPanelToTab(tab.id);
     chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   }
   toggleCaptureForTab(tab);
@@ -123,6 +173,7 @@ chrome.runtime.onStartup.addListener(setupContextMenu);
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== FILTER_TAB_MENU_ID || !tab || !tab.id) return;
+  bindPanelToTab(tab.id);
   chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   toggleCaptureForTab(tab);
 });
@@ -661,7 +712,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         chrome.runtime.sendMessage({
           type: "GET_AI_MODELS",
-          serverUrl: settings.serverUrl,
+          serverUrl: await resolveServerUrl(settings.serverUrl),
           apiKey: settings.apiKey,
         }, sendResponse);
       })();
@@ -670,6 +721,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "GET_STATE":
       sendResponse({ isActive: capturedTabId !== null, aiStatus: currentAIStatus });
       return false;
+
+    case "GET_ACCOUNT_STATUS":
+      // Session probe for the side panel's account chip. Uses the same
+      // cookie-carrying fetch as getFilterToken, but read-only (/api/me).
+      (async () => {
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ disabled: true });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/me`,
+            { credentials: "include", headers: { Accept: "application/json" } },
+            8000,
+          );
+          if (res.ok) {
+            const me = await res.json();
+            cacheProvidedServerUrl(me.serverUrl);
+            sendResponse({ signedIn: true, ...me, accountUrl: `${base}/account` });
+          } else {
+            sendResponse({ signedIn: false, status: res.status, loginUrl: `${base}/login` });
+          }
+        } catch {
+          sendResponse({ signedIn: false, error: "network", loginUrl: `${base}/login` });
+        }
+      })();
+      return true; // async response
   }
 });
 
@@ -701,6 +783,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 // Stop capture when the captured tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
+  // Clear the panel binding when its tab closes (the panel dies with the tab).
+  chrome.storage.session.get({ boundTabId: null }, ({ boundTabId }) => {
+    if (boundTabId === tabId) chrome.storage.session.set({ boundTabId: null });
+  });
   if (tabId === capturedTabId) {
     capturedTabId = null;
     capturedTabUrl = null;
@@ -722,6 +808,27 @@ function isAIMode(m) {
   return m === "ai" || m === "ai2";
 }
 
+// The website provisions the Pro AI server address (AI_SERVER_URL env on the
+// site, returned by /api/me and /api/filter-token). Cache it for the session
+// so capture flows can pick it up without an extra round-trip.
+function cacheProvidedServerUrl(url) {
+  if (typeof url === "string" && url) {
+    chrome.storage.session.set({ providedServerUrl: url });
+  }
+}
+
+// Effective AI server address: the user's explicit Settings entry wins
+// (self-hosting); otherwise whatever the website provisioned; otherwise none.
+async function resolveServerUrl(storedServerUrl) {
+  if (storedServerUrl) return storedServerUrl;
+  try {
+    const { providedServerUrl } = await chrome.storage.session.get({ providedServerUrl: null });
+    return providedServerUrl || "";
+  } catch {
+    return "";
+  }
+}
+
 async function getFilterToken() {
   const { websiteUrl } = await chrome.storage.local.get({ websiteUrl: "https://karafilt.com" });
   const base = (websiteUrl || "").trim().replace(/\/+$/, "");
@@ -734,6 +841,7 @@ async function getFilterToken() {
     );
     if (res.ok) {
       const data = await res.json();
+      cacheProvidedServerUrl(data.serverUrl);
       return { ok: true, token: data.token, entitlement: data.entitlement };
     }
     let reason = null;
@@ -807,7 +915,7 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
       type: "START_VIA_DISPLAY_MEDIA",
       mode: currentMode,
       aiModel: aiModel,
-      serverUrl: settings.serverUrl,
+      serverUrl: await resolveServerUrl(settings.serverUrl),
       apiKey: authToken,
     });
     return { success: true };
@@ -870,7 +978,7 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
       streamId: streamId,
       mode: currentMode,
       aiModel: aiModel,
-      serverUrl: settings.serverUrl,
+      serverUrl: await resolveServerUrl(settings.serverUrl),
       apiKey: authToken,
     });
 

@@ -522,8 +522,25 @@ function resetDisplay(statusText) {
   renderLines(null);
 }
 
-async function bindToActiveTab() {
-  const tab = await getActiveTab();
+// The panel is PINNED to the tab the user invoked Karafilt on — the service
+// worker stores boundTabId (storage.session) before opening the panel.
+// Falling back to the active tab covers any unforeseen open path.
+async function getPinnedTab() {
+  try {
+    const { boundTabId } = await chrome.storage.session.get({ boundTabId: null });
+    if (boundTabId != null) {
+      try {
+        return await chrome.tabs.get(boundTabId);
+      } catch {
+        // Tab is gone — fall through to the active tab.
+      }
+    }
+  } catch {}
+  return getActiveTab();
+}
+
+async function bindToPinnedTab() {
+  const tab = await getPinnedTab();
   if (!tab) {
     resetDisplay("No active tab");
     return;
@@ -651,8 +668,15 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 });
 
 // --- Tab change handling ---
-chrome.tabs.onActivated.addListener(() => {
-  bindToActiveTab();
+// The panel is tab-pinned: Chrome hides it on other tabs and re-shows it when
+// the user returns — no active-tab following. On re-show, re-request state in
+// case the song changed while the panel was hidden.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    bindToPinnedTab();
+    // The user may have signed in/out on karafilt.com while we were hidden.
+    refreshAccountStatus();
+  }
 });
 
 // Compare URLs by origin + pathname (ignore query-string changes for sync)
@@ -685,7 +709,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     resetDisplay("Loading...");
     // Give the page a moment to load the content script, then rebind
     setTimeout(() => {
-      if (tabId === activeTabId) bindToActiveTab();
+      if (tabId === activeTabId) bindToPinnedTab();
     }, 500);
   }
 });
@@ -769,6 +793,8 @@ const spStatusEl = $sp("sp-status");
 
 if (spToggleBtn && window.bindKaraokeControls) {
   window.bindKaraokeControls({
+    // Start/Stop must target the PINNED tab, not whatever tab is active.
+    getTabId: () => activeTabId,
     toggleBtn: spToggleBtn,
     btnLabel: spToggleBtn.querySelector(".btn-label"),
     playIcon: spToggleBtn.querySelector(".play-icon"),
@@ -795,5 +821,59 @@ if (spToggleBtn && window.bindKaraokeControls) {
   });
 }
 
+// --- Account chip (karafilt.com session) ──────────────────────────────────
+// The service worker probes GET /api/me with the site's session cookie and
+// reports sign-in + plan state. Hidden entirely when no Website URL is set
+// (self-hosted / offline use).
+const accountChipEl = document.getElementById("sp-account");
+const accountAvatarEl = document.getElementById("sp-account-avatar");
+const accountEmailEl = document.getElementById("sp-account-email");
+const accountPlanEl = document.getElementById("sp-account-plan");
+
+function accountPlanLabel(acc) {
+  if (acc.emailVerified === false) return "Verify email";
+  if (acc.entitlement === "subscription") return "Pro";
+  if (acc.entitlement === "trial") {
+    const mins = Math.max(0, Math.round((acc.trialSecondsRemaining || 0) / 60));
+    return `Trial · ${mins}m left`;
+  }
+  return "Trial ended";
+}
+
+function refreshAccountStatus() {
+  if (!accountChipEl) return;
+  chrome.runtime.sendMessage({ type: "GET_ACCOUNT_STATUS" }, (acc) => {
+    if (chrome.runtime.lastError || !acc || acc.disabled) {
+      accountChipEl.style.display = "none";
+      return;
+    }
+    accountChipEl.style.display = "";
+    if (acc.signedIn) {
+      accountChipEl.classList.remove("signed-out");
+      accountChipEl.href = acc.accountUrl || "https://karafilt.com/account";
+      accountAvatarEl.textContent = ((acc.email && acc.email[0]) || "?").toUpperCase();
+      accountEmailEl.textContent = acc.email || "Account";
+      accountPlanEl.textContent = accountPlanLabel(acc);
+    } else {
+      accountChipEl.classList.add("signed-out");
+      accountChipEl.href = acc.loginUrl || "https://karafilt.com/login";
+      accountAvatarEl.textContent = "?";
+      if (acc.error === "network") {
+        accountEmailEl.textContent = "Offline";
+        accountPlanEl.textContent = "Can't reach account site";
+      } else {
+        accountEmailEl.textContent = "Sign in";
+        accountPlanEl.textContent = "for AI filtering";
+      }
+    }
+  });
+}
+
+// Re-check when the Website URL setting changes (chip appears/disappears).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.websiteUrl) refreshAccountStatus();
+});
+
 // --- Init ---
-bindToActiveTab();
+bindToPinnedTab();
+refreshAccountStatus();
