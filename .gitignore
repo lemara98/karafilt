@@ -23,3 +23,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Raw screenshot captures (contain unredacted personal info)
+store-assets/raw/
