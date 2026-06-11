@@ -55,11 +55,12 @@ function flashIneligibleBadge(tabId) {
   }, 2000);
 }
 
-// Icon click — the main entry point: pin the panel to this tab, open it, and
-// start filtering in one click. Re-clicking on the bound tab toggles
-// filtering off (same semantics as Ctrl+Shift+K); the panel stays open. All
-// calls are issued synchronously so the click's user gesture covers both
-// sidePanel.open and tabCapture.getMediaStreamId.
+// Icon click — open the side panel pinned to this tab. Filtering does NOT
+// start automatically: the user presses Start in the panel (the click's
+// activeTab grant lets the SW capture this tab picker-free when they do).
+// Ctrl+Shift+K and the context menu remain explicit filter toggles. If
+// filtering is still running on a previously pinned tab, stop it so the
+// moved panel's Start/Stop state matches its new tab.
 chrome.action.onClicked.addListener((tab) => {
   if (!tab || !tab.id || !tab.url || !/^https?:/.test(tab.url)) {
     if (tab && tab.id) flashIneligibleBadge(tab.id);
@@ -67,7 +68,12 @@ chrome.action.onClicked.addListener((tab) => {
   }
   bindPanelToTab(tab.id);
   chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
-  toggleCaptureForTab(tab);
+  if (capturedTabId !== null && capturedTabId !== tab.id) {
+    capturedTabId = null;
+    capturedTabUrl = null;
+    chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
+  }
 });
 
 // Toggle capture for a tab: stop if it's the currently-captured tab,
@@ -722,6 +728,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ isActive: capturedTabId !== null, aiStatus: currentAIStatus });
       return false;
 
+    case "OPEN_LOGIN":
+      // Open the sign-in page in a floating popup window — reads like a
+      // modal auth dialog, and the music tab never loses visibility. The
+      // tabs.onUpdated watcher below closes it the moment login lands on
+      // /account.
+      (async () => {
+        const width = 420, height = 640;
+        let bounds = { width, height };
+        try {
+          // Center on the user's current window.
+          const cur = await chrome.windows.getLastFocused();
+          bounds.left = Math.max(0, Math.round((cur.left ?? 0) + ((cur.width ?? width) - width) / 2));
+          bounds.top = Math.max(0, Math.round((cur.top ?? 0) + ((cur.height ?? height) - height) / 2));
+        } catch {}
+        const win = await chrome.windows.create({
+          url: message.loginUrl,
+          type: "popup",
+          ...bounds,
+        });
+        const loginTabId = win.tabs && win.tabs[0] ? win.tabs[0].id : null;
+        await chrome.storage.session.set({
+          loginWatch: {
+            loginTabId,
+            loginWindowId: win.id,
+            returnTabId: message.returnTabId ?? null,
+          },
+        });
+      })();
+      break;
+
     case "GET_ACCOUNT_STATUS":
       // Session probe for the side panel's account chip. Uses the same
       // cookie-carrying fetch as getFilterToken, but read-only (/api/me).
@@ -781,11 +817,54 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
+// Sign-in round-trip: the side panel opens /login in a popup window via
+// OPEN_LOGIN; when that page lands on /account (the post-login redirect),
+// close the popup and refocus the tab the user came from. The panel is still
+// visible there and its account chip refreshes via the focus/visibility
+// hooks. State lives in storage.session so an idle SW restart mid-login
+// doesn't lose it.
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (!changeInfo.url) return;
+  const { loginWatch } = await chrome.storage.session.get({ loginWatch: null });
+  if (!loginWatch || tabId !== loginWatch.loginTabId) return;
+  let path;
+  try {
+    path = new URL(changeInfo.url).pathname;
+  } catch {
+    return;
+  }
+  if (path !== "/account") return;
+  await chrome.storage.session.set({ loginWatch: null });
+  if (loginWatch.loginWindowId != null) {
+    chrome.windows.remove(loginWatch.loginWindowId).catch(() => {});
+  } else {
+    chrome.tabs.remove(tabId).catch(() => {});
+  }
+  // The panel stayed visible the whole time (popup floats above it), so no
+  // visibilitychange fires — tell it explicitly to re-check the session.
+  chrome.runtime.sendMessage({ type: "ACCOUNT_CHANGED" }).catch(() => {});
+  if (loginWatch.returnTabId != null) {
+    try {
+      const ret = await chrome.tabs.get(loginWatch.returnTabId);
+      await chrome.tabs.update(ret.id, { active: true });
+      chrome.windows.update(ret.windowId, { focused: true }).catch(() => {});
+    } catch {
+      // The original tab is gone — nothing to return to.
+    }
+  }
+});
+
 // Stop capture when the captured tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   // Clear the panel binding when its tab closes (the panel dies with the tab).
   chrome.storage.session.get({ boundTabId: null }, ({ boundTabId }) => {
     if (boundTabId === tabId) chrome.storage.session.set({ boundTabId: null });
+  });
+  // Abandoned sign-in: user closed the login tab themselves — stop watching.
+  chrome.storage.session.get({ loginWatch: null }, ({ loginWatch }) => {
+    if (loginWatch && loginWatch.loginTabId === tabId) {
+      chrome.storage.session.set({ loginWatch: null });
+    }
   });
   if (tabId === capturedTabId) {
     capturedTabId = null;

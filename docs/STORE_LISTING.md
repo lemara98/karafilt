@@ -33,8 +33,8 @@ crop/scale them to exact spec into `store-assets/`.
   e.g. The Weeknd "Blinding Lights", Adele "Someone Like You", Queen
   "Bohemian Rhapsody". Verify the panel badge says "(synced)" before shooting.
 
-**The 4 shots** (with one-click start, just click the icon on the music tab —
-filtering and the panel come up together):
+**The 4 shots** (click the icon on the music tab to open the panel, then
+press Start Filtering):
 1. **Hero:** YouTube music video playing + side panel with synced lyrics,
    current line highlighted mid-song, filter running (Spectral; status
    "Filtering"). This is the listing's first impression.
@@ -71,10 +71,9 @@ produced for upload.
 > and shows time-synced lyrics in the side panel so you can sing along.
 >
 > **How it works**
-> Click the Karafilt icon (or press Ctrl+Shift+K) on a tab playing music —
-> filtering starts immediately and the side panel opens with the song's
-> lyrics. The panel stays pinned to that tab until you filter another one,
-> so the rest of your browsing is untouched.
+> Click the Karafilt icon on a tab playing music — the side panel opens with
+> the song's lyrics, pinned to that tab so the rest of your browsing is
+> untouched. Press Start Filtering (or Ctrl+Shift+K) and the vocals drop out.
 >
 > **Features**
 > • Real-time vocal removal — no uploads, no waiting

@@ -869,9 +869,32 @@ function refreshAccountStatus() {
   });
 }
 
+// Signed-out clicks route through the service worker so it can bring the
+// user BACK to this tab once sign-in completes — a plain link would strand
+// them on the website. Signed-in clicks keep normal link behaviour (account
+// page is intentional browsing).
+if (accountChipEl) {
+  accountChipEl.addEventListener("click", (e) => {
+    if (!accountChipEl.classList.contains("signed-out")) return;
+    e.preventDefault();
+    chrome.runtime.sendMessage({
+      type: "OPEN_LOGIN",
+      loginUrl: accountChipEl.href,
+      returnTabId: activeTabId,
+    });
+  });
+}
+
 // Re-check when the Website URL setting changes (chip appears/disappears).
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.websiteUrl) refreshAccountStatus();
+});
+
+// SW signals sign-in completed (login popup closed). The panel stayed
+// visible during the popup flow, so this is the only refresh trigger then.
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (sender.tab) return; // only service-worker broadcasts
+  if (message.type === "ACCOUNT_CHANGED") refreshAccountStatus();
 });
 
 // --- Init ---
