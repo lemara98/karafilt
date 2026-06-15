@@ -1,14 +1,30 @@
+<p align="center">
+  <img src="store-assets/marquee-1400x560.png" alt="Karafilt — real-time vocal removal for karaoke" width="900">
+</p>
+
 # Karafilt
 
 <p align="center">
   <img src="icons/icon128.png" alt="Karafilt" width="96">
 </p>
 
+<p align="center">
+  <strong>🌐 <a href="https://karafilt.com">karafilt.com</a></strong>
+</p>
+
 **Real-time vocal removal for any browser tab.** Turn any song playing in Chrome into a karaoke track — no downloads, no uploads, just click and sing.
+
+<p align="center">
+  <img src="store-assets/screenshot-1-hero.png" alt="Karafilt side panel showing synced lyrics over a YouTube video" width="820">
+</p>
 
 ## How It Works
 
 Karafilt captures audio from your active browser tab and removes the vocals in real time. It works with YouTube, Spotify Web Player, SoundCloud, or any website that plays audio.
+
+<p align="center">
+  <img src="store-assets/screenshot-2-focus.png" alt="Karafilt karaoke focus mode" width="820">
+</p>
 
 ### Processing Modes
 
@@ -16,17 +32,29 @@ Karafilt captures audio from your active browser tab and removes the vocals in r
 |------|---------|---------|-----------------|
 | **Spectral (Good)** | Medium | Real-time | No |
 | **Basic (Fast)** | Lower | Real-time | No |
-| **AI Separation (Best)** | High | ~5s | Yes |
-| **AI + Deep Clean** | Highest | ~10s | Yes |
+| **AI Separation (Best)** | High | Relatively small | Yes |
+| **AI + Deep Clean** | Highest | Relatively small | Yes |
 
 - **Spectral** and **Basic** modes run entirely in your browser using WebAssembly — no server needed.
 - **AI** modes use neural network vocal separation (Demucs) for significantly better quality, but require a backend server for processing.
+
+<p align="center">
+  <img src="store-assets/screenshot-3-modes.png" alt="Karafilt processing mode dropdown showing all four modes" width="820">
+</p>
+
+When a track has multiple matches (covers, live versions, remixes), pick the right one from the alternatives picker:
+
+<p align="center">
+  <img src="store-assets/screenshot-4-picker.png" alt="Karafilt alternate-version picker" width="820">
+</p>
 
 ## Installation
 
 ### From Chrome Web Store
 
-*Coming soon*
+**[Install Karafilt from the Chrome Web Store →](https://chromewebstore.google.com/detail/eiclobknpdiipnhdpfpegfnkplmfnmoo)**
+
+Then create an account and unlock Pro AI filtering at **[karafilt.com](https://karafilt.com)**.
 
 ### Manual Install (Developer Mode)
 
@@ -167,3 +195,11 @@ Copyright © 2026 Betania.io.
 
 See also [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+---
+
+<p align="center">
+  <a href="https://karafilt.com"><img src="store-assets/promo-tile-440x280.png" alt="Karafilt — karafilt.com" width="360"></a>
+  <br>
+  <strong>🌐 <a href="https://karafilt.com">karafilt.com</a></strong>
+</p>
