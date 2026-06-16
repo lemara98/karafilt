@@ -98,10 +98,10 @@
 
       <div class="section">
         <div class="section-header">
-          <label for="sp-mode">Algorithm</label>
+          <label for="sp-mode">Mode</label>
         </div>
         <div class="select-wrap">
-          <select id="sp-mode">
+          <select id="sp-mode" data-fancy-mode>
             <option value="stft">Spectral (Good)</option>
             <option value="basic">Basic (Fast)</option>
             <option value="ai">AI Separation (Best)</option>
@@ -183,6 +183,7 @@
   </div>
 
   <script src="../shared/song-match.js"></script>
+  <script src="../shared/fancy-select.js"></script>
   <script src="../shared/controls-bindings.js"></script>
   <script src="sidepanel.js"></script>
 </body>
