@@ -124,7 +124,8 @@
   // We still decode only a small window AHEAD of the playhead, via a cursor.
   let packets = [];            // [{tsUs, frame}], sorted by tsUs, deduped
   let playedThru = -1;         // tsUs decoded up to (advances with the playhead)
-  const DECODE_WINDOW_S = 4;
+  const DECODE_WINDOW_S = 30;  // decode this far ahead → lead for big (15s) pod batches
+  const MAX_DECODE_PER_TICK_S = 6; // cap per 150ms tick so the fill doesn't burst/jank
   const HISTORY_S = 90;        // keep this much behind the playhead for back-seeks
   let pumpTimer = null;
   let needResync = false;
@@ -162,16 +163,21 @@
     const v = document.querySelector("video");
     if (v && !seekWired) { seekWired = true; v.addEventListener("seeked", onSeek); }
     if (!decoder) ensureDecoder();
-    if (!decoder) return;
-    if (!v || v.paused) return;        // don't advance the cursor while paused
+    if (!decoder || !v) return;
+    // NOTE: we DO decode while paused — packets are kept in the store, so the
+    // pipeline can fill ahead during the pause-to-buffer load (and resume is
+    // instant). `now` is frozen while paused, so the window stays bounded.
     const now = v.currentTime;
     // Never decode far behind the playhead (after a forward jump / long stall).
     if (playedThru < (now - 1) * 1e6) playedThru = (now - 1) * 1e6;
     const horizonTs = (now + DECODE_WINDOW_S) * 1e6;
+    // Spread the (now larger) window over a few ticks so the initial fill never
+    // decodes ~1500 packets at once and janks the page.
+    const tickHorizonTs = Math.min(horizonTs, playedThru + MAX_DECODE_PER_TICK_S * 1e6);
     let i = firstIndexAfter(playedThru), guard = 0;
     for (; i < packets.length && guard < 4000; i++, guard++) {
       const p = packets[i];
-      if (p.tsUs > horizonTs) break;   // ahead of the window — wait for the playhead
+      if (p.tsUs > tickHorizonTs) break;   // ahead of this tick's slice — next tick
       try { decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: p.tsUs, data: p.frame })); }
       catch (e) { if (once("decode-throw")) warn("decode threw:", e && e.message); }
       playedThru = p.tsUs;
