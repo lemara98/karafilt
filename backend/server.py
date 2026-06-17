@@ -24,13 +24,27 @@ import websockets
 
 from models import HAS_AUDIO_SEPARATOR
 from backends import ModelManager
-from websocket_handler import handle_client
+from websocket_handler import handle_client, stats_snapshot, log
+
+
+async def stats_heartbeat(interval=60):
+    """Periodically log aggregate throughput so a deployed pod is observable
+    via `tail -f` on the log (and tells you at a glance if the GPU keeps up)."""
+    while True:
+        await asyncio.sleep(interval)
+        s = stats_snapshot()
+        if s["connections"] == 0:
+            continue  # nothing has happened yet; stay quiet
+        log(f"[heartbeat] active={s['active']} conns={s['connections']} "
+            f"recv={s['received']} sent={s['sent']} dropped={s['dropped']} "
+            f"drop_rate={s['drop_rate'] * 100:.0f}% "
+            f"avg_proc={s['avg_process_s']:.2f}s/chunk rtf={s['realtime_factor']:.2f}")
 
 # Suppress noisy websocket handshake errors (harmless connection probes)
 logging.getLogger("websockets").setLevel(logging.ERROR)
 
 
-async def main(port, device, auth_token=None, num_workers=4):
+async def main(host, port, device, auth_token=None, num_workers=4):
     manager = ModelManager(device=device)
 
     available = manager.get_available_models()
@@ -52,7 +66,8 @@ async def main(port, device, auth_token=None, num_workers=4):
         else:
             print("Usage metering disabled (set KARAFILT_USAGE_URL + USAGE_API_SECRET)")
 
-    print(f"\nStarting WebSocket server on ws://localhost:{port} (workers={num_workers})")
+    print(f"\nStarting WebSocket server on ws://{host}:{port} (workers={num_workers})")
+    asyncio.create_task(stats_heartbeat())
     async with websockets.serve(
         functools.partial(
             handle_client,
@@ -60,7 +75,7 @@ async def main(port, device, auth_token=None, num_workers=4):
             auth_token=auth_token,
             num_workers=num_workers,
         ),
-        "localhost", port,
+        host, port,
         logger=logging.getLogger("websockets"),
         max_size=10 * 1024 * 1024,  # 10MB — audio chunks can be ~2MB for 5s stereo
     ):
@@ -69,6 +84,10 @@ async def main(port, device, auth_token=None, num_workers=4):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Karaoke Filter Multi-Model Backend")
+    parser.add_argument("--host", type=str,
+                        default=os.environ.get("KARAFILT_HOST", "0.0.0.0"),
+                        help="Bind address (env: KARAFILT_HOST, default 0.0.0.0 so the "
+                             "RunPod/host proxy can reach it; use 127.0.0.1 for local-only)")
     parser.add_argument("--port", type=int, default=9876)
     parser.add_argument("--device", type=str, default="auto",
                         help="Device: cpu, cuda, or auto")
@@ -85,4 +104,4 @@ if __name__ == "__main__":
     if args.workers < 1:
         args.workers = 1
 
-    asyncio.run(main(args.port, args.device, args.auth_token, args.workers))
+    asyncio.run(main(args.host, args.port, args.device, args.auth_token, args.workers))

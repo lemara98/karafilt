@@ -4,10 +4,48 @@ import asyncio
 import json
 import os
 import struct
+import time
 import urllib.request
+from datetime import datetime, timezone
 
 import numpy as np
 import websockets
+
+# ── Observability ───────────────────────────────────────────────────────────
+# Process-wide counters so the server can emit a periodic heartbeat (see
+# server.py) and a per-session summary on disconnect. Cheap plain ints — the
+# event loop is single-threaded, so no locking needed.
+_STATS = {
+    "active": 0,            # currently-connected clients
+    "total_connections": 0,
+    "chunks_received": 0,
+    "chunks_sent": 0,
+    "chunks_dropped": 0,    # queue overflow + worker errors
+    "audio_seconds": 0.0,   # total audio submitted for separation
+    "process_seconds": 0.0, # cumulative wall time inside manager.process
+    "process_count": 0,
+}
+
+
+def log(msg):
+    """Timestamped, flushed log line so `tail -f` on the pod shows it live."""
+    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def stats_snapshot():
+    """Aggregate counters + derived rates for the heartbeat line."""
+    s = _STATS
+    return {
+        "active": s["active"],
+        "connections": s["total_connections"],
+        "received": s["chunks_received"],
+        "sent": s["chunks_sent"],
+        "dropped": s["chunks_dropped"],
+        "drop_rate": s["chunks_dropped"] / max(1, s["chunks_received"]),
+        "avg_process_s": s["process_seconds"] / max(1, s["process_count"]),
+        # processing wall-time per second of audio: <1 means the box keeps up.
+        "realtime_factor": s["process_seconds"] / (s["audio_seconds"] or 1e-9),
+    }
 
 # ── Phase 3: token trust boundary ───────────────────────────────────────────
 # When FILTER_JWT_SECRET is set, clients must authenticate with a short-lived JWT
@@ -70,7 +108,14 @@ async def _report_usage(user_id, seconds):
 
 async def handle_client(websocket, manager, auth_token=None, num_workers=4):
     """Handle a WebSocket connection from the browser extension."""
-    print(f"Client connected: {websocket.remote_address} (workers={num_workers})")
+    _STATS["active"] += 1
+    _STATS["total_connections"] += 1
+    t_connect = time.monotonic()
+    # Per-session tallies, mirrored into _STATS, summarised on disconnect.
+    sess = {"recv": 0, "sent": 0, "dropped": 0, "audio_s": 0.0,
+            "proc_s": 0.0, "proc_n": 0}
+    log(f"Client connected: {websocket.remote_address} "
+        f"(workers={num_workers}, active={_STATS['active']})")
     session_model = "htdemucs"
     session_two_pass = False
     # Auth is required if a static token OR filter-JWT auth is configured.
@@ -99,14 +144,22 @@ async def handle_client(websocket, manager, auth_token=None, num_workers=4):
         while True:
             seq_id, sr, stereo, model_name, two_pass = await work_queue.get()
             try:
+                t0 = time.monotonic()
                 accompaniment = await asyncio.to_thread(
                     manager.process, stereo, sr, model_name, two_pass
                 )
+                dt = time.monotonic() - t0
+                sess["proc_s"] += dt
+                sess["proc_n"] += 1
+                _STATS["process_seconds"] += dt
+                _STATS["process_count"] += 1
                 result_buffer[seq_id] = (sr, accompaniment)
             except Exception as e:
                 import traceback
                 print(f"[ai-worker] error on chunk #{seq_id}: {e}")
                 traceback.print_exc()
+                sess["dropped"] += 1
+                _STATS["chunks_dropped"] += 1
                 result_buffer[seq_id] = None  # let sender skip past
             finally:
                 work_queue.task_done()
@@ -127,6 +180,8 @@ async def handle_client(websocket, manager, auth_token=None, num_workers=4):
                 out_samples = accompaniment.shape[1]
                 header = struct.pack("<II", sr, out_samples)
                 await websocket.send(header + interleaved.tobytes())
+                sess["sent"] += 1
+                _STATS["chunks_sent"] += 1
                 print(f"Sent {out_samples} processed samples (chunk #{seq})")
 
     worker_tasks = [asyncio.create_task(ai_worker()) for _ in range(num_workers)]
@@ -214,6 +269,13 @@ async def handle_client(websocket, manager, auth_token=None, num_workers=4):
             samples = np.frombuffer(pcm_data, dtype=np.float32).copy()
             stereo = samples.reshape(-1, 2).T
 
+            sess["recv"] += 1
+            _STATS["chunks_received"] += 1
+            if sample_rate > 0:
+                secs = num_samples / sample_rate
+                sess["audio_s"] += secs
+                _STATS["audio_seconds"] += secs
+
             tp_label = "+two-pass" if session_two_pass else ""
             print(f"Queued {num_samples} samples at {sample_rate} Hz "
                   f"({num_samples / sample_rate:.1f}s, model={session_model}{tp_label}, seq=#{incoming_seq})")
@@ -229,6 +291,8 @@ async def handle_client(websocket, manager, auth_token=None, num_workers=4):
                     work_queue.task_done()
                     result_buffer[dropped_seq] = None
                     result_ready.set()
+                    sess["dropped"] += 1
+                    _STATS["chunks_dropped"] += 1
                     print(f"[ai-worker] queue full; dropped chunk #{dropped_seq}")
                 except asyncio.QueueEmpty:
                     pass
@@ -246,7 +310,7 @@ async def handle_client(websocket, manager, auth_token=None, num_workers=4):
                     t.add_done_callback(usage_tasks.discard)
 
     except websockets.exceptions.ConnectionClosed:
-        print(f"Client disconnected: {websocket.remote_address}")
+        log(f"Client disconnected: {websocket.remote_address}")
     except Exception as e:
         import traceback
         print(f"Error: {e}")
@@ -266,3 +330,16 @@ async def handle_client(websocket, manager, auth_token=None, num_workers=4):
             t.cancel()
         sender_task.cancel()
         await asyncio.gather(*worker_tasks, sender_task, return_exceptions=True)
+
+        # Per-session analytics summary. rtf<1 ⇒ the box kept up with realtime;
+        # rtf>1 ⇒ it fell behind and dropped chunks (the CPU-vs-GPU tell).
+        _STATS["active"] -= 1
+        wall = time.monotonic() - t_connect
+        drop_rate = sess["dropped"] / max(1, sess["recv"])
+        avg_proc = sess["proc_s"] / max(1, sess["proc_n"])
+        rtf = sess["proc_s"] / (sess["audio_s"] or 1e-9)
+        verdict = "kept up" if rtf < 1 else "TOO SLOW — needs a faster GPU"
+        log(f"[session] {websocket.remote_address} ended: "
+            f"recv={sess['recv']} sent={sess['sent']} dropped={sess['dropped']} "
+            f"({drop_rate * 100:.0f}% drop), audio={sess['audio_s']:.1f}s in {wall:.1f}s wall, "
+            f"avg_proc={avg_proc:.2f}s/chunk, rtf={rtf:.2f} ({verdict})")
