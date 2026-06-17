@@ -26,7 +26,22 @@
   let video = null;
   let mutedByUs = false;
   let firstBlock = true;
+  let wired = false;
   const sources = new Set();
+
+  function stopAll() {
+    for (const s of sources) { try { s.onended = null; s.stop(); } catch {} }
+    sources.clear();
+  }
+  function wireVideo(v) {
+    if (wired || !v) return;
+    wired = true;
+    // Our audio is scheduled on the AudioContext clock, which keeps running when
+    // the video pauses/seeks — so stop it explicitly. New blocks resume playback.
+    v.addEventListener("pause", stopAll);
+    v.addEventListener("seeking", stopAll);
+    v.addEventListener("ended", stopAll);
+  }
 
   function getCtx() {
     if (!ctx) {
@@ -59,6 +74,8 @@
   function onPcm(contentTime, rate, channels, pcm) {
     const v = findVideo();
     if (!v) return;
+    wireVideo(v);
+    if (v.paused) return;        // don't schedule while paused
     muteOriginal();
     const audio = getCtx();
 

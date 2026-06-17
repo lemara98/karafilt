@@ -117,6 +117,30 @@
   let decodedSeconds = 0;
   let decodedChunks = 0;
 
+  // Demuxed Opus packets waiting to be decoded. We decode only a small window
+  // AHEAD of the playhead (not the whole ~48s look-ahead) so we never jank the
+  // page with a burst and never queue far-ahead audio that would keep playing
+  // after a pause. The window still gives plenty of lead for the pod.
+  const pkts = [];
+  const DECODE_WINDOW_S = 4;
+  let pumpTimer = null;
+  function videoTime() { const v = document.querySelector("video"); return v ? v.currentTime : 0; }
+  function pump() {
+    if (!decoder) ensureDecoder();
+    if (!decoder) return;
+    const now = videoTime();
+    const horizon = now + DECODE_WINDOW_S;
+    let guard = 0;
+    while (pkts.length && guard++ < 4000) {
+      const t = pkts[0].tsUs / 1e6;
+      if (t > horizon) break;          // ahead of the window — wait for the playhead
+      const pk = pkts.shift();
+      if (t < now - 2) continue;       // stale (already played past) — drop, don't decode
+      try { decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: pk.tsUs, data: pk.frame })); }
+      catch (e) { if (once("decode-throw")) warn("decode threw:", e && e.message); }
+    }
+  }
+
   function concat(a, b) {
     const out = new Uint8Array(a.length + b.length);
     out.set(a, 0); out.set(b, a.length);
@@ -187,15 +211,10 @@
     const frame = data.subarray(p);
     if (audioTrack != null && tn.value !== audioTrack) return; // not the audio track
     if (audioTrack == null) audioTrack = tn.value;
-    if (!decoder) ensureDecoder();
-    if (!decoder || frame.length === 0) return;
-    const tsTicks = clusterTs + relTime;
-    const tsUs = Math.round((tsTicks * timestampScale) / 1000); // ns→µs
-    try {
-      decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: tsUs, data: frame }));
-    } catch (e) {
-      if (once("decode-throw")) warn("decode() threw:", e && e.message);
-    }
+    if (frame.length === 0) return;
+    const tsUs = Math.round(((clusterTs + relTime) * timestampScale) / 1000); // ns→µs
+    // Enqueue; the windowed pump() decodes it when the playhead is close.
+    pkts.push({ tsUs, frame: frame.slice() });
   }
 
   // Flat EBML walk over the rolling buffer from `pos`. Descends into masters,
@@ -239,6 +258,9 @@
     if (!u8 || u8.length === 0) return;
     buf = concat(buf, u8);
     try { parse(); } catch (e) { if (once("parse-throw")) warn("parse error:", e && e.message); }
+    pump();
+    // Keep decoding as the playhead advances, even without new appends.
+    if (!pumpTimer) pumpTimer = setInterval(pump, 150);
   }
 
   // ── MSE hooks ──────────────────────────────────────────────────────────
