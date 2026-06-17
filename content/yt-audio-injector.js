@@ -117,31 +117,70 @@
   let decodedSeconds = 0;
   let decodedChunks = 0;
 
-  // Demuxed Opus packets waiting to be decoded. We decode only a small window
-  // AHEAD of the playhead (not the whole ~48s look-ahead) so we never jank the
-  // page with a burst and never queue far-ahead audio that would keep playing
-  // after a pause. The window still gives plenty of lead for the pod.
-  const pkts = [];
+  // Persistent, time-sorted store of demuxed Opus packets (NOT a consumed queue).
+  // Keeping them lets us decode from any position on a seek — including seeks INTO
+  // already-buffered content, where YouTube never re-appends (so a consumed queue
+  // would starve until the playhead reached the buffer end tens of seconds later).
+  // We still decode only a small window AHEAD of the playhead, via a cursor.
+  let packets = [];            // [{tsUs, frame}], sorted by tsUs, deduped
+  let playedThru = -1;         // tsUs decoded up to (advances with the playhead)
   const DECODE_WINDOW_S = 4;
+  const HISTORY_S = 90;        // keep this much behind the playhead for back-seeks
   let pumpTimer = null;
-  function videoTime() { const v = document.querySelector("video"); return v ? v.currentTime : 0; }
+  let needResync = false;
+  let seekWired = false;
+
+  function addPacket(tsUs, frame) {
+    const n = packets.length;
+    if (n === 0 || tsUs > packets[n - 1].tsUs) { packets.push({ tsUs, frame }); return; }
+    // out-of-order (e.g. a re-fetch after a back-seek): binary insert, dedup ~1ms
+    let lo = 0, hi = n;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (packets[m].tsUs < tsUs) lo = m + 1; else hi = m; }
+    if (lo < n && Math.abs(packets[lo].tsUs - tsUs) < 1000) return;
+    packets.splice(lo, 0, { tsUs, frame });
+  }
+  function firstIndexAfter(tsUs) {   // first i with packets[i].tsUs > tsUs
+    let lo = 0, hi = packets.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (packets[m].tsUs <= tsUs) lo = m + 1; else hi = m; }
+    return lo;
+  }
+
+  // On seek, re-aim the decode cursor at the new position and start a fresh
+  // decoder (clean timestamps). KEEP `packets` so buffered regions replay
+  // instantly; needResync re-aligns the demuxer for any future appends.
+  function onSeek() {
+    const v = document.querySelector("video");
+    const newPos = v ? v.currentTime : 0;
+    playedThru = (newPos - 0.2) * 1e6;
+    needResync = true;
+    clusterTs = 0;
+    if (decoder) { try { decoder.close(); } catch {} decoder = null; }
+    log(`seek → cursor=${newPos.toFixed(2)}s, stored=${packets.length} pkts, opusHead=${opusHead ? "kept" : "MISSING"}`);
+  }
+
   function pump() {
+    const v = document.querySelector("video");
+    if (v && !seekWired) { seekWired = true; v.addEventListener("seeked", onSeek); }
     if (!decoder) ensureDecoder();
     if (!decoder) return;
-    const v = document.querySelector("video");
-    // Don't consume the packet queue while paused — otherwise the window's worth
-    // of audio gets decoded-then-dropped and resume starts with a silent hole.
-    if (!v || v.paused) return;
+    if (!v || v.paused) return;        // don't advance the cursor while paused
     const now = v.currentTime;
-    const horizon = now + DECODE_WINDOW_S;
-    let guard = 0;
-    while (pkts.length && guard++ < 4000) {
-      const t = pkts[0].tsUs / 1e6;
-      if (t > horizon) break;          // ahead of the window — wait for the playhead
-      const pk = pkts.shift();
-      if (t < now - 2) continue;       // stale (already played past) — drop, don't decode
-      try { decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: pk.tsUs, data: pk.frame })); }
+    // Never decode far behind the playhead (after a forward jump / long stall).
+    if (playedThru < (now - 1) * 1e6) playedThru = (now - 1) * 1e6;
+    const horizonTs = (now + DECODE_WINDOW_S) * 1e6;
+    let i = firstIndexAfter(playedThru), guard = 0;
+    for (; i < packets.length && guard < 4000; i++, guard++) {
+      const p = packets[i];
+      if (p.tsUs > horizonTs) break;   // ahead of the window — wait for the playhead
+      try { decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: p.tsUs, data: p.frame })); }
       catch (e) { if (once("decode-throw")) warn("decode threw:", e && e.message); }
+      playedThru = p.tsUs;
+    }
+    // Bound memory: drop history older than HISTORY_S behind the playhead.
+    const cutoff = (now - HISTORY_S) * 1e6;
+    if (packets.length > 200 && packets[0].tsUs < cutoff) {
+      let d = 0; while (d < packets.length && packets[d].tsUs < cutoff) d++;
+      if (d > 50) packets.splice(0, d);
     }
   }
 
@@ -217,14 +256,33 @@
     if (audioTrack == null) audioTrack = tn.value;
     if (frame.length === 0) return;
     const tsUs = Math.round(((clusterTs + relTime) * timestampScale) / 1000); // ns→µs
-    // Enqueue; the windowed pump() decodes it when the playhead is close.
-    pkts.push({ tsUs, frame: frame.slice() });
+    // Store (sorted, deduped); the windowed pump() decodes from the cursor.
+    addPacket(tsUs, frame.slice());
+  }
+
+  // Scan for the next EBML header (init segment) or Cluster start — used to
+  // re-align the parser after a seek, regardless of where the byte-stream was cut.
+  function findResyncPoint(b, from) {
+    for (let i = Math.max(0, from); i + 4 <= b.length; i++) {
+      if (b[i] === 0x1a && b[i + 1] === 0x45 && b[i + 2] === 0xdf && b[i + 3] === 0xa3) return i; // EBML
+      if (b[i] === 0x1f && b[i + 1] === 0x43 && b[i + 2] === 0xb6 && b[i + 3] === 0x75) return i; // Cluster
+    }
+    return -1;
   }
 
   // Flat EBML walk over the rolling buffer from `pos`. Descends into masters,
   // uses/skip leaves, and stops at the first incomplete element (resumes on the
   // next append). Commits `pos` only past fully-consumed elements.
   function parse() {
+    if (needResync) {
+      const at = findResyncPoint(buf, pos);
+      if (at < 0) {                               // boundary hasn't arrived yet
+        if (buf.length - pos > 1 << 16) { buf = buf.slice(buf.length - 4); pos = 0; } // bound memory, keep tail
+        return;
+      }
+      pos = at;
+      needResync = false;
+    }
     while (pos < buf.length) {
       const id = readId(buf, pos);
       if (!id) break;
