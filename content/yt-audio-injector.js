@@ -1,19 +1,19 @@
 // Karafilt read-ahead capture — PHASE 0 PROBE (MAIN world, document_start).
 //
-// PURPOSE: this build does NOT capture or forward any audio. It only inspects
-// YouTube's own media network requests and logs, to the page console, whether
-// the audio stream is delivered as interceptable GET WebM/Opus byte-ranges (the
-// shape our read-ahead feature needs) — or as POST/UMP/SABR (multiplexed,
-// non-interceptable) or DRM/encrypted (must be skipped).
+// PURPOSE: inspect-only. Captures/forwards NO audio. It checks two possible
+// interception points for YouTube's look-ahead audio and logs what it finds:
+//   (1) network: GET WebM/Opus byte-ranges (works only on the legacy path);
+//   (2) MSE: SourceBuffer.appendBuffer — the segments YouTube hands the browser
+//       AFTER de-obfuscating SABR/UMP. This is the robust point: it's the clean,
+//       already-demuxed audio buffered ahead of the playhead.
 //
-// It wraps window.fetch + XMLHttpRequest exactly like the existing caption
-// injector (content/yt-captions-injector.js) — clone-and-read so playback is
-// never affected. Nothing here decodes audio or talks to the extension yet.
+// Modern YouTube uses SABR (POST/UMP), so (1) usually stays silent and (2) is
+// the path that matters. If (2) also stays silent, YouTube is doing MSE in a
+// Worker (harder — would need a worker hook).
 //
-// Local research only; gated behind a localStorage flag so it stays silent
-// unless explicitly enabled. To enable: on a youtube.com tab run
-//   localStorage.kflProbe = '1'
-// then reload. To stop: delete localStorage.kflProbe (or just unload the branch).
+// Local research only. Gated behind a localStorage flag:
+//   localStorage.kflProbe = '1'   (then reload). Filter the console by
+//   "KFL-Probe" to cut YouTube/ad-blocker noise.
 
 (() => {
   if (window.__kflYtAudioProbe) return;
@@ -27,147 +27,126 @@
   const warn = (...a) => console.warn(TAG, ...a);
 
   if (!ENABLED) {
-    // One quiet hint so it's discoverable, then stay out of the way.
     try {
-      console.log(
-        `${TAG} idle. To probe YouTube audio delivery, run  localStorage.kflProbe='1'  then reload.`,
-      );
+      console.log(`${TAG} idle. To probe, run  localStorage.kflProbe='1'  then reload.`);
     } catch {}
     return;
   }
 
-  log("active (MAIN world) — watching googlevideo media requests…");
+  log("active (MAIN world). Watching network ranges + MSE appendBuffer. Filter console by 'KFL-Probe'.");
 
-  // Audio itags YouTube serves (Opus / AAC / Vorbis). mime=audio is authoritative
-  // either way; this is a secondary signal.
-  const AUDIO_ITAGS = new Set([
-    139, 140, 141, 171, 172, 249, 250, 251, 256, 258, 327, 328, 338, 774,
-  ]);
+  const AUDIO_ITAGS = new Set([139, 140, 141, 171, 172, 249, 250, 251, 256, 258, 327, 328, 338, 774]);
+  const seen = new Set(); // dedupe one-shot signals
 
-  // Container sniff has run for these itags already (only deep-sniff the first
-  // segment per itag to keep overhead negligible).
-  const sniffed = new Set();
-
-  function isMediaUrl(url) {
-    return typeof url === "string" &&
-      url.includes("googlevideo.com") && url.includes("videoplayback");
+  function once(key) {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   }
 
-  function parseInfo(url, method) {
-    let u;
-    try { u = new URL(url, location.origin); } catch { return null; }
+  function sniffContainer(u8) {
+    if (u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3) {
+      return { container: "WebM/Matroska", codecHint: "Opus/Vorbis" };
+    }
+    const fourcc = String.fromCharCode(u8[4] || 0, u8[5] || 0, u8[6] || 0, u8[7] || 0);
+    if (fourcc === "ftyp" || fourcc === "styp" || fourcc === "sidx" || fourcc === "moof") {
+      return { container: "MP4/ISO-BMFF", codecHint: "AAC" };
+    }
+    return { container: "unknown/other", codecHint: "?" };
+  }
+
+  function sniffEncrypted(u8) {
+    let s = "";
+    for (let i = 0; i < Math.min(u8.length, 2048); i++) s += String.fromCharCode(u8[i]);
+    return /pssh|senc|cenc|enca|encv|tenc/.test(s);
+  }
+
+  function toU8(data) {
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    return null;
+  }
+
+  // ── (2) MSE: the path that matters under SABR ──────────────────────────
+  // Tag each SourceBuffer audio/video at creation (mime tells us), then watch
+  // what gets appended. Appends happen ahead of the playhead = look-ahead.
+  let mseHooked = false;
+  try {
+    if (typeof MediaSource !== "undefined" && MediaSource.prototype.addSourceBuffer) {
+      const origAdd = MediaSource.prototype.addSourceBuffer;
+      MediaSource.prototype.addSourceBuffer = function (mime) {
+        const sb = origAdd.apply(this, arguments);
+        try {
+          sb.__kflAudio = /audio/i.test(String(mime || ""));
+          log(`MSE SourceBuffer created: "${mime}" ${sb.__kflAudio ? "← AUDIO" : "(video)"}`);
+        } catch {}
+        return sb;
+      };
+
+      const origAppend = SourceBuffer.prototype.appendBuffer;
+      const counts = new WeakMap();
+      SourceBuffer.prototype.appendBuffer = function (data) {
+        try {
+          if (this.__kflAudio) {
+            const u8 = toU8(data);
+            const n = (counts.get(this) || 0) + 1;
+            counts.set(this, n);
+            if (u8 && once("mse-audio-first")) {
+              const c = sniffContainer(u8);
+              const enc = sniffEncrypted(u8);
+              log(
+                `MSE AUDIO append #${n}: ${u8.byteLength}B → ${c.container} (${c.codecHint}), ` +
+                (enc ? "ENCRYPTED/DRM ✗" : "clear ✓"),
+              );
+              if ((c.container.startsWith("WebM") || c.container.startsWith("MP4")) && !enc) {
+                log("  ✓✓ FEASIBLE: clean de-UMP'd audio segments are reachable via SourceBuffer — read-ahead can work here");
+              } else if (enc) {
+                warn("  ✗ audio segments look encrypted (DRM) — read-ahead would skip this content");
+              }
+            } else if (u8 && n % 25 === 0) {
+              log(`MSE AUDIO append #${n} (${u8.byteLength}B) — still flowing ahead of playhead`);
+            }
+          }
+        } catch {}
+        return origAppend.apply(this, arguments);
+      };
+      mseHooked = true;
+    }
+  } catch {}
+  if (!mseHooked) warn("MediaSource not hookable in this context (MSE may run in a Worker).");
+
+  // ── (1) network: legacy GET ranges + SABR/POST detection (informational) ─
+  function isMediaUrl(url) {
+    return typeof url === "string" && url.includes("googlevideo.com") && url.includes("videoplayback");
+  }
+  function noteNetwork(url, method) {
+    let u; try { u = new URL(url, location.origin); } catch { return; }
     const q = u.searchParams;
     const mime = decodeURIComponent(q.get("mime") || "");
     const itag = parseInt(q.get("itag") || "0", 10);
     const isAudio = mime.startsWith("audio/") || AUDIO_ITAGS.has(itag);
-    return {
-      method,
-      mime,
-      itag,
-      isAudio,
-      range: q.get("range") || "(header)",
-      clen: q.get("clen") || "?",
-      ump: q.has("ump") || q.has("sabr") || q.get("sabr") === "1",
-    };
-  }
-
-  function sniffContainer(buf) {
-    const b = new Uint8Array(buf, 0, Math.min(buf.byteLength, 4096));
-    // EBML / WebM magic
-    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) {
-      return { container: "WebM/Matroska", codecHint: "Opus/Vorbis" };
-    }
-    // MP4: 'ftyp' / 'styp' at bytes 4..8
-    const fourcc = String.fromCharCode(b[4] || 0, b[5] || 0, b[6] || 0, b[7] || 0);
-    if (fourcc === "ftyp" || fourcc === "styp") {
-      return { container: "MP4/ISO-BMFF", codecHint: "AAC" };
-    }
-    return { container: "unknown/other (maybe UMP)", codecHint: "?" };
-  }
-
-  function sniffEncrypted(buf) {
-    // Rough scan of the first few KB for common encryption fourccs (MP4) — a
-    // hint, not authoritative. WebM ContentEncryption isn't reliably sniffable
-    // this cheaply; treat absence as "likely clear".
-    const b = new Uint8Array(buf, 0, Math.min(buf.byteLength, 4096));
-    const s = String.fromCharCode.apply(null, b);
-    return /pssh|senc|cenc|enca|encv|tenc/.test(s);
-  }
-
-  function report(info, buf) {
-    if (!info || !info.isAudio) return;
-    if (info.method === "POST" || info.ump) {
-      warn(
-        `AUDIO via ${info.method}${info.ump ? " (ump/sabr)" : ""} itag=${info.itag} ` +
-        `mime="${info.mime}" → multiplexed/obfuscated delivery; NOT interceptable as ranges.`,
-      );
+    const M = String(method || "GET").toUpperCase();
+    if (M === "POST" || q.has("sabr") || q.has("ump")) {
+      if (once("net-sabr")) warn("network: videoplayback via POST/SABR/UMP → not interceptable as ranges (expected on modern YT; using MSE path instead).");
       return;
     }
-    const base =
-      `AUDIO GET itag=${info.itag} mime="${info.mime}" range=${info.range} clen=${info.clen}`;
-    if (buf && !sniffed.has(info.itag)) {
-      sniffed.add(info.itag);
-      const c = sniffContainer(buf);
-      const enc = sniffEncrypted(buf);
-      log(
-        `${base}\n        → ${c.container} (${c.codecHint}), ` +
-        `${enc ? "ENCRYPTED/DRM ✗ (would skip)" : "clear ✓"}, first-segment ${buf.byteLength}B`,
-      );
-      if (c.container.startsWith("WebM") && !enc) {
-        log("        ✓✓ interceptable GET WebM/Opus — read-ahead looks FEASIBLE for this video");
-      }
-    } else {
-      log(`${base} (${buf ? buf.byteLength + "B" : "size via header"})`);
+    if (isAudio && once("net-audio-get-" + itag)) {
+      log(`network: legacy GET audio itag=${itag} mime="${mime}" range=${q.get("range") || "(header)"} — interceptable directly too.`);
     }
   }
 
-  // ── fetch interceptor ──────────────────────────────────────────────────
   const origFetch = window.fetch;
-  window.fetch = async function (input, init) {
-    const url = typeof input === "string" ? input : (input && input.url) || "";
-    const method = (init && init.method) || (input && input.method) || "GET";
-    const response = await origFetch.apply(this, arguments);
+  window.fetch = function (input, init) {
     try {
-      if (isMediaUrl(url)) {
-        const info = parseInfo(url, String(method).toUpperCase());
-        if (info && info.isAudio) {
-          if (info.method === "POST" || info.ump || sniffed.has(info.itag)) {
-            report(info, null);
-          } else {
-            response.clone().arrayBuffer()
-              .then((buf) => report(info, buf))
-              .catch(() => report(info, null));
-          }
-        }
-      }
-    } catch {
-      // never break fetch
-    }
-    return response;
-  };
-
-  // ── XHR interceptor ────────────────────────────────────────────────────
-  const origOpen = XMLHttpRequest.prototype.open;
-  const origSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this.__kflUrl = url;
-    this.__kflMethod = method;
-    return origOpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function () {
-    try {
-      if (isMediaUrl(this.__kflUrl)) {
-        this.addEventListener("load", () => {
-          try {
-            const info = parseInfo(this.__kflUrl, String(this.__kflMethod || "GET").toUpperCase());
-            if (!info || !info.isAudio) return;
-            const buf =
-              this.response instanceof ArrayBuffer ? this.response : null;
-            report(info, info.method === "POST" || info.ump ? null : buf);
-          } catch {}
-        });
-      }
+      const url = typeof input === "string" ? input : (input && input.url) || "";
+      const method = (init && init.method) || (input && input.method) || "GET";
+      if (isMediaUrl(url)) noteNetwork(url, method);
     } catch {}
-    return origSend.apply(this, arguments);
+    return origFetch.apply(this, arguments);
+  };
+  const origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    try { if (isMediaUrl(url)) noteNetwork(url, method); } catch {}
+    return origOpen.apply(this, arguments);
   };
 })();
