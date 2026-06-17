@@ -23,19 +23,20 @@ function sendAIStatus(status, detail) {
 // Server settings are pushed in from the service worker (offscreen
 // docs can't access chrome.storage directly — only chrome.runtime).
 
-// AI mode state. Chunk size kept at 5s because Demucs's hybrid transformer
-// produces noticeably better separation with that much surrounding context;
-// shorter chunks (we tried 2s) audibly degrade vocal isolation.
+// AI mode state. Capture is real-time, so the AI audio inherently trails the
+// video by ~(chunk + processing + lead) — true video sync isn't possible on the
+// capture path. Instead the side panel keeps the LYRICS synced to the audio
+// (shifted back by the reported lag), so karaoke timing stays correct while the
+// video runs a little ahead.
 //
-// Each received chunk carries ~(CHUNK-OVERLAP)=4s of fresh content and capture
-// is real-time, so supply ≈ consumption with no slack. We therefore buffer a
-// short LEAD before starting gapless playback: AI_PREBUFFER_CHUNKS chunks ≈ 8s
-// of audio, ~4s of jitter slack so the output never underruns. While the lead
-// fills we stay SILENT (no STFT preview) — the user waits for clean AI. Higher
-// = smoother but a longer initial wait.
-const AI_CHUNK_SECONDS = 5;
+// Smaller chunks + a smaller lead = shorter startup and less lag, at some cost
+// to Demucs separation quality (it segments internally to ~3s, so 3s input is
+// about the floor before quality drops audibly). While the lead fills we stay
+// SILENT (no STFT preview). Tuning knobs: raise CHUNK/PREBUFFER for smoother /
+// higher-quality at the cost of a longer initial wait and more lag.
+const AI_CHUNK_SECONDS = 3;      // ~3s capture floor → short startup
 const AI_OVERLAP_SECONDS = 1;   // overlap between consecutive chunks
-const AI_PREBUFFER_CHUNKS = 2;  // lead buffer before gapless playback starts
+const AI_PREBUFFER_CHUNKS = 1;  // minimal lead before gapless playback starts
 let aiRecordBuffers = [[], []];
 let aiRecordedSamples = 0;
 let aiOverlapBuffers = [null, null]; // stores tail of previous chunk for overlap
