@@ -16,16 +16,45 @@
   if (window.__kflYtAudioProbe) return;
   window.__kflYtAudioProbe = true;
 
-  let ENABLED = false;
-  try { ENABLED = localStorage.getItem("kflProbe") === "1"; } catch {}
+  let PROBE = false, LIVE = false;
+  try { PROBE = localStorage.getItem("kflProbe") === "1"; } catch {}
+  try { LIVE = localStorage.getItem("kflLookahead") === "1"; } catch {}
   const TAG = "[KFL-Probe]";
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
-  if (!ENABLED) {
-    try { console.log(`${TAG} idle. Run  localStorage.kflProbe='1'  then reload.`); } catch {}
+  if (!PROBE && !LIVE) {
+    try { console.log(`${TAG} idle. Probe: localStorage.kflProbe='1'. Live: localStorage.kflLookahead='1'. Then reload.`); } catch {}
     return;
   }
-  log("active (Phase 1: demux + decode). Filter console by 'KFL-Probe'.");
+  log(`active (${LIVE ? "LIVE: decode + post PCM" : "Phase 1: demux + decode"}). Filter console by 'KFL-Probe'.`);
+
+  // Coalesced PCM posting → isolated world (only in LIVE mode).
+  const POST_BLOCK_SECONDS = 1.0;
+  let blkParts = [], blkFrames = 0, blkStart = null, blkChannels = 2, blkRate = 48000;
+  function flushBlock() {
+    if (!blkParts.length) return;
+    const total = blkFrames * blkChannels;
+    const out = new Float32Array(total);
+    let o = 0;
+    for (const p of blkParts) { out.set(p, o); o += p.length; }
+    try {
+      window.postMessage(
+        { kfl: "KFL_LOOKAHEAD_PCM", contentTime: blkStart, sampleRate: blkRate, channels: blkChannels, pcm: out.buffer },
+        "*", [out.buffer],
+      );
+    } catch (e) { if (once("post-throw")) warn("postMessage failed:", e && e.message); }
+    blkParts = []; blkFrames = 0; blkStart = null;
+  }
+  function postPcm(ad, contentTime) {
+    blkRate = ad.sampleRate; blkChannels = ad.numberOfChannels;
+    const n = ad.numberOfFrames;
+    const inter = new Float32Array(n * blkChannels);
+    try { ad.copyTo(inter, { planeIndex: 0, format: "f32" }); }
+    catch { try { ad.copyTo(inter, { planeIndex: 0 }); } catch { return; } }
+    if (blkStart === null) blkStart = contentTime;
+    blkParts.push(inter); blkFrames += n;
+    if (blkFrames >= POST_BLOCK_SECONDS * blkRate) flushBlock();
+  }
 
   const seen = new Set();
   const once = (k) => (seen.has(k) ? false : (seen.add(k), true));
@@ -117,7 +146,8 @@
       const contentTime = ad.timestamp / 1e6;
       decodedSeconds += n / rate;
       decodedChunks++;
-      if (decodedChunks <= 3 || decodedChunks % 50 === 0) {
+      if (LIVE) postPcm(ad, contentTime);
+      if (PROBE && (decodedChunks <= 3 || decodedChunks % 50 === 0)) {
         let rms = 0;
         try {
           const f = new Float32Array(n);

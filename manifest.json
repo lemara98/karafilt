@@ -21,6 +21,12 @@
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["content/yt-lookahead.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "action": {
