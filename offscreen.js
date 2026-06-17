@@ -25,18 +25,29 @@ function sendAIStatus(status, detail) {
 
 // AI mode state. Chunk size kept at 5s because Demucs's hybrid transformer
 // produces noticeably better separation with that much surrounding context;
-// shorter chunks (we tried 2s) audibly degrade vocal isolation. Prebuffer
-// stays at 1 chunk so the AI starts crossfading in sooner — worker pool
-// keeps the queue from emptying in steady state.
+// shorter chunks (we tried 2s) audibly degrade vocal isolation.
+//
+// Each received chunk carries ~(CHUNK-OVERLAP)=4s of fresh content and capture
+// is real-time, so supply ≈ consumption with no slack. We therefore buffer a
+// short LEAD before starting gapless playback: AI_PREBUFFER_CHUNKS chunks ≈ 8s
+// of audio, ~4s of jitter slack so the output never underruns. While the lead
+// fills we stay SILENT (no STFT preview) — the user waits for clean AI. Higher
+// = smoother but a longer initial wait.
 const AI_CHUNK_SECONDS = 5;
 const AI_OVERLAP_SECONDS = 1;   // overlap between consecutive chunks
-const AI_PREBUFFER_CHUNKS = 1;  // wait for 1 chunk before crossfading to AI
+const AI_PREBUFFER_CHUNKS = 2;  // lead buffer before gapless playback starts
 let aiRecordBuffers = [[], []];
 let aiRecordedSamples = 0;
 let aiOverlapBuffers = [null, null]; // stores tail of previous chunk for overlap
 let aiPlaybackQueue = [];
-let aiPlaying = false;
 let aiChunksReceived = 0;
+// Gapless playback scheduler. Chunks are scheduled back-to-back on the
+// AudioContext clock (not chained via onended) so jitter can't open gaps.
+let aiStarted = false;             // gapless playback has begun (lead filled)
+let aiNextStartTime = null;        // ctx-clock time the next chunk is scheduled at
+let aiPlaybackStartCtxTime = null; // ctx time the first chunk began playing
+let aiScheduledContentSeconds = 0; // total content scheduled (for the lag clamp)
+let aiScheduledSources = [];       // live BufferSources, for stop/teardown
 let aiBufferNode = null;
 let aiGainNode = null;
 let workletGainNode = null;  // controls worklet volume (fades out when AI plays)
@@ -48,32 +59,23 @@ let aiOutputGainNode = null; // controls AI playback volume
 // how far the AI audio lags the video — the side panel shifts the lyric
 // highlight back by this so lyrics line up with what the user hears.
 let aiCaptureStartCtxTime = null;     // ctx time of the first captured AI frame
-let aiPlayedSamples = 0;              // cumulative samples of fully-played chunks
-let aiCurrentChunkStartCtxTime = null;// ctx time the in-flight source.start() ran
-let aiCurrentChunkSampleRate = 0;
-let aiCurrentChunkSamples = 0;        // in-flight chunk length
-let aiAudible = false;                // true only while AI output is the audible path
 let lastReportedLag = -1;             // dedupe AI_LAG sends
 
 function resetAILagState() {
   aiCaptureStartCtxTime = null;
-  aiPlayedSamples = 0;
-  aiCurrentChunkStartCtxTime = null;
-  aiCurrentChunkSampleRate = 0;
-  aiCurrentChunkSamples = 0;
-  aiAudible = false;
   lastReportedLag = -1;
 }
 
 function computeLagSeconds() {
-  if (!audioContext || !aiAudible || aiCaptureStartCtxTime === null) return 0;
+  if (!audioContext || !aiStarted || aiCaptureStartCtxTime === null
+      || aiPlaybackStartCtxTime === null) return 0;
   const capturedSeconds = audioContext.currentTime - aiCaptureStartCtxTime;
-  let playedSeconds = aiPlayedSamples / audioContext.sampleRate;
-  if (aiCurrentChunkSamples > 0 && aiCurrentChunkStartCtxTime !== null) {
-    const elapsed = audioContext.currentTime - aiCurrentChunkStartCtxTime;
-    const chunkDur = aiCurrentChunkSamples / aiCurrentChunkSampleRate;
-    playedSeconds += Math.max(0, Math.min(elapsed, chunkDur));
-  }
+  // Content actually emitted = time elapsed since playback began, capped at
+  // what's been scheduled — so a (rare) underrun gap correctly grows the lag.
+  const playedSeconds = Math.min(
+    audioContext.currentTime - aiPlaybackStartCtxTime,
+    aiScheduledContentSeconds,
+  );
   return Math.max(0, capturedSeconds - playedSeconds);
 }
 
@@ -285,8 +287,9 @@ function switchMode(mode) {
   }
 
   if (isAIMode(mode) && captureReady) {
-    // Worklet stays at full volume as preview until AI chunks arrive
-    if (workletGainNode) workletGainNode.gain.value = 1.0;
+    // Wait SILENTLY for the AI lead buffer — no STFT preview while preparing.
+    // (STFT only returns as a fallback if the connection actually fails.)
+    if (workletGainNode) workletGainNode.gain.value = 0.0;
     if (aiOutputGainNode) aiOutputGainNode.gain.value = 0.0;
     sendAIStatus("connecting");
     openWebSocket();
@@ -307,18 +310,20 @@ function openWebSocket() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
   closeWebSocket();
 
-  // No AI server configured (Settings → Server URL). Stay on the STFT
-  // preview path; the UI explains how to enable AI.
+  // No AI server configured (Settings → Server URL). Fall back to the audible
+  // STFT preview so the user isn't left in silence; the UI explains how to
+  // enable AI.
   if (!serverUrl) {
+    if (workletGainNode) workletGainNode.gain.value = 1.0;
     sendAIStatus("no_server");
     return;
   }
 
+  stopAIPlayback();
   aiRecordBuffers = [[], []];
   aiRecordedSamples = 0;
   aiOverlapBuffers = [null, null];
   aiPlaybackQueue = [];
-  aiPlaying = false;
   aiChunksReceived = 0;
 
   dbg(`Karafilt: connecting to backend at ${serverUrl}...`);
@@ -387,38 +392,13 @@ function openWebSocket() {
     aiChunksReceived++;
     dbg(`Received ${numSamples} processed samples from Demucs (chunk #${aiChunksReceived})`);
 
-    if (aiChunksReceived < AI_PREBUFFER_CHUNKS) {
+    // While the lead buffer fills we stay silent and show progress; once it's
+    // full, scheduleReadyChunks() begins gapless playback and emits ai_active.
+    if (!aiStarted && aiChunksReceived < AI_PREBUFFER_CHUNKS) {
       sendAIStatus("buffering", { received: aiChunksReceived, needed: AI_PREBUFFER_CHUNKS });
     }
 
-    // Wait for pre-buffer to fill before crossfading from STFT to AI
-    if (aiChunksReceived === AI_PREBUFFER_CHUNKS && workletGainNode && workletGainNode.gain.value > 0.1) {
-      const now = audioContext.currentTime;
-      workletGainNode.gain.linearRampToValueAtTime(0.0, now + 0.5);
-      aiOutputGainNode.gain.linearRampToValueAtTime(1.0, now + 0.5);
-      sendAIStatus("ai_active");
-
-      // The queued AI audio represents content from ~aiCaptureStartCtxTime
-      // onwards, but the video element has advanced (now - that) seconds
-      // beyond it. Seek the video back so frames match the audio about to
-      // play. Re-anchor the lag clock so lyric-sync reports ~0 during the
-      // synced window. Drift may return after the prebuffered chunks play
-      // out (duplicate captures during the rewatch period); toggling AI
-      // off/on re-syncs.
-      if (aiCaptureStartCtxTime !== null) {
-        const seekBackSeconds = now - aiCaptureStartCtxTime;
-        if (seekBackSeconds > 0.05) {
-          chrome.runtime.sendMessage({
-            type: "MEDIA_SEEK_RELATIVE",
-            deltaSeconds: -seekBackSeconds,
-          }).catch(() => {});
-          aiCaptureStartCtxTime = now;
-          aiPlayedSamples = 0;
-        }
-      }
-    }
-
-    if (!aiPlaying && aiChunksReceived >= AI_PREBUFFER_CHUNKS) playNextAIChunk();
+    scheduleReadyChunks();
   };
 
   ws.onerror = (err) => {
@@ -428,8 +408,10 @@ function openWebSocket() {
 
   ws.onclose = (event) => {
     dbg("Karafilt: WebSocket closed, code:", event.code, "reason:", event.reason);
-    // If unexpected close while in AI mode, fall back to STFT preview
+    // Unexpected close while in AI mode → stop AI playback and fall back to the
+    // audible STFT preview (a genuine failure, distinct from buffering silence).
     if (isAIMode(currentMode) && workletGainNode) {
+      stopAIPlayback();
       workletGainNode.gain.value = 1.0;
       if (aiOutputGainNode) aiOutputGainNode.gain.value = 0.0;
       sendAIStatus("fallback");
@@ -445,11 +427,11 @@ function closeWebSocket() {
     ws.close();
     ws = null;
   }
+  stopAIPlayback();
   aiRecordBuffers = [[], []];
   aiRecordedSamples = 0;
   aiOverlapBuffers = [null, null];
   aiPlaybackQueue = [];
-  aiPlaying = false;
   aiChunksReceived = 0;
   aiChunksSent = 0;
   emitZeroLag();
@@ -534,48 +516,80 @@ function sendAIChunk() {
   }
 }
 
-function playNextAIChunk() {
-  if (!audioContext || aiPlaybackQueue.length === 0) {
-    aiPlaying = false;
-    // Queue drained — fold the chunk that just finished, then the audible
-    // output is the near-zero-latency STFT preview again, so lag is 0.
-    if (aiCurrentChunkSamples > 0) aiPlayedSamples += aiCurrentChunkSamples;
-    aiCurrentChunkSamples = 0;
-    aiCurrentChunkStartCtxTime = null;
-    aiAudible = false;
-    // If queue is empty and we're still in AI mode, fade back to STFT preview
-    if (isAIMode(currentMode) && workletGainNode && aiOutputGainNode) {
-      const now = audioContext.currentTime;
-      workletGainNode.gain.linearRampToValueAtTime(1.0, now + 0.3);
-      aiOutputGainNode.gain.linearRampToValueAtTime(0.0, now + 0.3);
-      sendAIStatus("stft_preview");
+// Schedule every buffered chunk onto the AudioContext timeline, back-to-back,
+// so playback is gapless regardless of when chunks arrive. Playback only begins
+// once the lead buffer (AI_PREBUFFER_CHUNKS) is filled; until then we stay
+// silent (no STFT preview) — the user waits for clean AI output.
+function scheduleReadyChunks() {
+  if (!audioContext) return;
+
+  if (!aiStarted) {
+    if (aiChunksReceived < AI_PREBUFFER_CHUNKS) return; // keep waiting, silent
+    // Lead filled — start gapless playback. Bring the AI output up (the worklet
+    // preview stays muted) and anchor the timeline + lag clock.
+    aiStarted = true;
+    aiNextStartTime = audioContext.currentTime + 0.08; // small scheduling epsilon
+    aiPlaybackStartCtxTime = aiNextStartTime;
+    aiScheduledContentSeconds = 0;
+    const now = audioContext.currentTime;
+    if (workletGainNode) {
+      workletGainNode.gain.cancelScheduledValues(now);
+      workletGainNode.gain.setValueAtTime(workletGainNode.gain.value, now);
+      workletGainNode.gain.linearRampToValueAtTime(0.0, now + 0.2);
     }
-    reportLag();
-    return;
+    if (aiOutputGainNode) {
+      aiOutputGainNode.gain.cancelScheduledValues(now);
+      aiOutputGainNode.gain.setValueAtTime(0.0, now);
+      aiOutputGainNode.gain.linearRampToValueAtTime(1.0, now + 0.2);
+    }
+    sendAIStatus("ai_active");
   }
 
-  aiPlaying = true;
-  const chunk = aiPlaybackQueue.shift();
+  while (aiPlaybackQueue.length > 0) {
+    const chunk = aiPlaybackQueue.shift();
+    // Underrun guard: if the cursor slipped behind the clock (ran dry — rare
+    // with the lead buffer), resync to now. The small gap is reflected in lag.
+    if (aiNextStartTime < audioContext.currentTime) {
+      aiNextStartTime = audioContext.currentTime;
+    }
+    const buffer = audioContext.createBuffer(2, chunk.left.length, chunk.sampleRate);
+    buffer.getChannelData(0).set(chunk.left);
+    buffer.getChannelData(1).set(chunk.right);
 
-  // The chunk that was in flight has now finished (onended fired) — fold its
-  // full length into the played total before tracking the new one.
-  if (aiCurrentChunkSamples > 0) aiPlayedSamples += aiCurrentChunkSamples;
-  aiCurrentChunkSamples = chunk.left.length;
-  aiCurrentChunkSampleRate = chunk.sampleRate;
-  aiCurrentChunkStartCtxTime = audioContext.currentTime;
-  aiAudible = true;
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(aiOutputGainNode);
+    source.start(aiNextStartTime);
 
-  const buffer = audioContext.createBuffer(2, chunk.left.length, chunk.sampleRate);
-  buffer.getChannelData(0).set(chunk.left);
-  buffer.getChannelData(1).set(chunk.right);
-
-  const source = audioContext.createBufferSource();
-  source.buffer = buffer;
-  source.connect(aiOutputGainNode);
-  source.onended = playNextAIChunk;
-  source.start();
-
+    const chunkDur = chunk.left.length / chunk.sampleRate;
+    aiNextStartTime += chunkDur;
+    aiScheduledContentSeconds += chunkDur;
+    aiScheduledSources.push(source);
+    source.onended = () => {
+      const i = aiScheduledSources.indexOf(source);
+      if (i !== -1) aiScheduledSources.splice(i, 1);
+      // Drained mid-stream (rare with the lead buffer): show a brief re-buffer
+      // instead of a stale "AI Active". Never reverts to the STFT preview;
+      // playback resumes silently when the next chunk is scheduled.
+      if (aiStarted && aiScheduledSources.length === 0 && aiPlaybackQueue.length === 0) {
+        sendAIStatus("buffering");
+      }
+      reportLag();
+    };
+  }
   reportLag();
+}
+
+// Stop and clear all scheduled AI sources, resetting the playback timeline.
+function stopAIPlayback() {
+  for (const s of aiScheduledSources) {
+    try { s.onended = null; s.stop(); } catch {}
+  }
+  aiScheduledSources = [];
+  aiStarted = false;
+  aiNextStartTime = null;
+  aiPlaybackStartCtxTime = null;
+  aiScheduledContentSeconds = 0;
 }
 
 function cleanupAudio() {
