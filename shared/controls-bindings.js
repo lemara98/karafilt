@@ -14,7 +14,7 @@
   const AI_STATUS_LABELS = {
     idle: null,
     connecting: "Connecting to server...",
-    recording: "STFT Preview — recording audio...",
+    recording: "Preparing AI — recording audio...",
     processing: "Sending audio to AI...",
     buffering: "Buffering AI output...",
     ai_active: "AI Active",
