@@ -33,7 +33,7 @@ phase2:
 		--no-entry \
 		-lm \
 		-s WASM=1 \
-		-s "EXPORTED_FUNCTIONS=[\"_init\",\"_get_input_buffer_l\",\"_get_input_buffer_r\",\"_get_output_buffer_l\",\"_get_output_buffer_r\",\"_process_center_cancel\",\"_cleanup\",\"_stft_init\",\"_stft_get_input_l\",\"_stft_get_input_r\",\"_stft_get_output_l\",\"_stft_get_output_r\",\"_stft_process\",\"_stft_set_attenuation\",\"_stft_set_vocal_range\",\"_stft_cleanup\",\"_malloc\",\"_free\"]" \
+		-s "EXPORTED_FUNCTIONS=[\"_init\",\"_get_input_buffer_l\",\"_get_input_buffer_r\",\"_get_output_buffer_l\",\"_get_output_buffer_r\",\"_process_center_cancel\",\"_cleanup\",\"_stft_init\",\"_stft_get_input_l\",\"_stft_get_input_r\",\"_stft_get_output_l\",\"_stft_get_output_r\",\"_stft_process\",\"_stft_set_attenuation\",\"_stft_set_depth\",\"_stft_set_vocal_range\",\"_stft_cleanup\",\"_malloc\",\"_free\"]" \
 		-s ALLOW_MEMORY_GROWTH=0 \
 		-s INITIAL_MEMORY=4194304 \
 		-s TOTAL_STACK=262144 \

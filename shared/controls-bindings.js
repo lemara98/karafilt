@@ -7,6 +7,7 @@
   const MODE_HINTS = {
     basic: "Fast center-channel cancellation",
     stft: "Frequency-selective, preserves bass & stereo",
+    stft_deep: "Aggressive — also removes center backing vocals (thinner mix)",
     ai: "Neural network separation — requires server",
     ai2: "Two-pass AI, removes backing vocals too",
   };
