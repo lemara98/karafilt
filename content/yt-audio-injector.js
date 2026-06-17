@@ -1,19 +1,16 @@
-// Karafilt read-ahead capture — PHASE 0 PROBE (MAIN world, document_start).
+// Karafilt read-ahead capture — PHASE 1 PROBE (MAIN world, document_start).
 //
-// PURPOSE: inspect-only. Captures/forwards NO audio. It checks two possible
-// interception points for YouTube's look-ahead audio and logs what it finds:
-//   (1) network: GET WebM/Opus byte-ranges (works only on the legacy path);
-//   (2) MSE: SourceBuffer.appendBuffer — the segments YouTube hands the browser
-//       AFTER de-obfuscating SABR/UMP. This is the robust point: it's the clean,
-//       already-demuxed audio buffered ahead of the playhead.
+// Builds on the Phase 0 finding that YouTube hands the browser clean WebM/Opus
+// audio via MSE SourceBuffer.appendBuffer (ahead of the playhead) even under
+// SABR. This phase PROVES we can turn those segments into real PCM:
+//   MSE appendBuffer(audio) → rolling WebM stream → EBML demux → Opus packets
+//   → WebCodecs AudioDecoder → Float32 PCM. It then logs decode correctness
+//   (sample rate, channels, RMS, and the LEAD = content-time − video.currentTime,
+//   which must be > 0 to confirm we're decoding audio the playhead hasn't reached).
 //
-// Modern YouTube uses SABR (POST/UMP), so (1) usually stays silent and (2) is
-// the path that matters. If (2) also stays silent, YouTube is doing MSE in a
-// Worker (harder — would need a worker hook).
-//
-// Local research only. Gated behind a localStorage flag:
-//   localStorage.kflProbe = '1'   (then reload). Filter the console by
-//   "KFL-Probe" to cut YouTube/ad-blocker noise.
+// Still inspect-only: it decodes and measures, but forwards/plays NOTHING.
+// Local research; gated behind localStorage.kflProbe='1' (then reload). Filter
+// the console by "KFL-Probe".
 
 (() => {
   if (window.__kflYtAudioProbe) return;
@@ -21,55 +18,205 @@
 
   let ENABLED = false;
   try { ENABLED = localStorage.getItem("kflProbe") === "1"; } catch {}
-
   const TAG = "[KFL-Probe]";
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
-
   if (!ENABLED) {
-    try {
-      console.log(`${TAG} idle. To probe, run  localStorage.kflProbe='1'  then reload.`);
-    } catch {}
+    try { console.log(`${TAG} idle. Run  localStorage.kflProbe='1'  then reload.`); } catch {}
     return;
   }
+  log("active (Phase 1: demux + decode). Filter console by 'KFL-Probe'.");
 
-  log("active (MAIN world). Watching network ranges + MSE appendBuffer. Filter console by 'KFL-Probe'.");
+  const seen = new Set();
+  const once = (k) => (seen.has(k) ? false : (seen.add(k), true));
+  const videoEl = () => document.querySelector("video");
 
-  const AUDIO_ITAGS = new Set([139, 140, 141, 171, 172, 249, 250, 251, 256, 258, 327, 328, 338, 774]);
-  const seen = new Set(); // dedupe one-shot signals
-
-  function once(key) {
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  // ── EBML var-int readers ───────────────────────────────────────────────
+  // readId keeps the length-marker bits (so IDs match the standard hex values).
+  // readSize strips them and flags the all-ones "unknown size" form.
+  function vintLen(first) {
+    let mask = 0x80, len = 1;
+    while (len <= 8 && !(first & mask)) { mask >>= 1; len++; }
+    return len > 8 ? 0 : len;
   }
-
-  function sniffContainer(u8) {
-    if (u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3) {
-      return { container: "WebM/Matroska", codecHint: "Opus/Vorbis" };
+  function readId(buf, pos) {
+    if (pos >= buf.length) return null;
+    const len = vintLen(buf[pos]);
+    if (!len || pos + len > buf.length) return null;
+    let v = 0;
+    for (let i = 0; i < len; i++) v = v * 256 + buf[pos + i];
+    return { value: v, len };
+  }
+  function readSize(buf, pos) {
+    if (pos >= buf.length) return null;
+    const len = vintLen(buf[pos]);
+    if (!len || pos + len > buf.length) return null;
+    const marker = 1 << (8 - len);
+    let v = buf[pos] & (marker - 1);
+    let allOnes = v === marker - 1;
+    for (let i = 1; i < len; i++) {
+      v = v * 256 + buf[pos + i];
+      if (buf[pos + i] !== 0xff) allOnes = false;
     }
-    const fourcc = String.fromCharCode(u8[4] || 0, u8[5] || 0, u8[6] || 0, u8[7] || 0);
-    if (fourcc === "ftyp" || fourcc === "styp" || fourcc === "sidx" || fourcc === "moof") {
-      return { container: "MP4/ISO-BMFF", codecHint: "AAC" };
+    return { value: v, len, unknown: allOnes };
+  }
+  function readUint(u8) { let v = 0; for (let i = 0; i < u8.length; i++) v = v * 256 + u8[i]; return v; }
+
+  // Element IDs we care about. Master elements are "descended into" (we read
+  // their header then keep walking their children inline); everything else is a
+  // leaf we either use or skip by its size.
+  const MASTERS = new Set([
+    0x1a45dfa3, 0x18538067, 0x1549a966, 0x1654ae6b, 0xae, 0xe0, 0xe1,
+    0x1f43b675, 0xa0,
+  ]);
+  const ID_TIMESTAMPSCALE = 0x2ad7b1;
+  const ID_TRACKNUMBER = 0xd7;
+  const ID_CODECID = 0x86;
+  const ID_CODECPRIVATE = 0x63a2;
+  const ID_TIMESTAMP = 0xe7;     // cluster base timestamp
+  const ID_SIMPLEBLOCK = 0xa3;
+  const ID_BLOCK = 0xa1;
+
+  // ── Demux + decode state ───────────────────────────────────────────────
+  let buf = new Uint8Array(0);
+  let pos = 0;
+  let timestampScale = 1e6;       // ns per tick (WebM default)
+  let audioTrack = null;
+  let opusHead = null;
+  let clusterTs = 0;
+  let decoder = null;
+  let decodedSeconds = 0;
+  let decodedChunks = 0;
+
+  function concat(a, b) {
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a, 0); out.set(b, a.length);
+    return out;
+  }
+
+  function ensureDecoder() {
+    if (decoder || !opusHead) return;
+    if (typeof AudioDecoder === "undefined") { warn("WebCodecs AudioDecoder unavailable"); return; }
+    const channels = opusHead.length > 9 ? opusHead[9] : 2;
+    try {
+      decoder = new AudioDecoder({
+        output: onAudioData,
+        error: (e) => warn("decoder error:", e && e.message),
+      });
+      decoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: channels, description: opusHead });
+      log(`decoder configured: opus, ${channels}ch, 48kHz (OpusHead ${opusHead.length}B)`);
+    } catch (e) {
+      warn("decoder.configure failed:", e && e.message);
+      decoder = null;
     }
-    return { container: "unknown/other", codecHint: "?" };
   }
 
-  function sniffEncrypted(u8) {
-    let s = "";
-    for (let i = 0; i < Math.min(u8.length, 2048); i++) s += String.fromCharCode(u8[i]);
-    return /pssh|senc|cenc|enca|encv|tenc/.test(s);
+  function onAudioData(ad) {
+    try {
+      const rate = ad.sampleRate, ch = ad.numberOfChannels, n = ad.numberOfFrames;
+      const contentTime = ad.timestamp / 1e6;
+      decodedSeconds += n / rate;
+      decodedChunks++;
+      if (decodedChunks <= 3 || decodedChunks % 50 === 0) {
+        let rms = 0;
+        try {
+          const f = new Float32Array(n);
+          ad.copyTo(f, { planeIndex: 0, format: "f32-planar" });
+          for (let i = 0; i < n; i++) rms += f[i] * f[i];
+          rms = Math.sqrt(rms / n);
+        } catch {}
+        const v = videoEl();
+        const cur = v ? v.currentTime : NaN;
+        const lead = isFinite(cur) ? (contentTime - cur).toFixed(2) : "?";
+        log(
+          `decoded #${decodedChunks}: t=${contentTime.toFixed(2)}s ${ch}ch ${rate}Hz ` +
+          `rms=${rms.toFixed(4)} | total=${decodedSeconds.toFixed(1)}s decoded | ` +
+          `LEAD over playhead=${lead}s (currentTime=${isFinite(cur) ? cur.toFixed(2) : "?"})`,
+        );
+        if (once("first-decode") && rms > 0) {
+          log("  ✓✓ PHASE 1 PASS: look-ahead WebM/Opus decodes to valid PCM ahead of the playhead.");
+        }
+      }
+    } catch (e) {
+      warn("onAudioData error:", e && e.message);
+    } finally {
+      ad.close();
+    }
   }
 
-  function toU8(data) {
-    if (data instanceof ArrayBuffer) return new Uint8Array(data);
-    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  function handleSimpleBlock(data) {
+    // [vint track][int16 BE rel timecode][flags][frame...]
+    const tn = readSize(data, 0); // track number is a vint (strip marker)
+    if (!tn) return;
+    let p = tn.len;
+    if (p + 3 > data.length) return;
+    const rel = (data[p] << 8) | data[p + 1]; // signed int16 BE
+    const relTime = rel >= 0x8000 ? rel - 0x10000 : rel;
+    p += 2;
+    p += 1; // flags byte (ignore lacing — Opus blocks are single-frame on YT)
+    const frame = data.subarray(p);
+    if (audioTrack != null && tn.value !== audioTrack) return; // not the audio track
+    if (audioTrack == null) audioTrack = tn.value;
+    if (!decoder) ensureDecoder();
+    if (!decoder || frame.length === 0) return;
+    const tsTicks = clusterTs + relTime;
+    const tsUs = Math.round((tsTicks * timestampScale) / 1000); // ns→µs
+    try {
+      decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: tsUs, data: frame }));
+    } catch (e) {
+      if (once("decode-throw")) warn("decode() threw:", e && e.message);
+    }
+  }
+
+  // Flat EBML walk over the rolling buffer from `pos`. Descends into masters,
+  // uses/skip leaves, and stops at the first incomplete element (resumes on the
+  // next append). Commits `pos` only past fully-consumed elements.
+  function parse() {
+    while (pos < buf.length) {
+      const id = readId(buf, pos);
+      if (!id) break;
+      const sz = readSize(buf, pos + id.len);
+      if (!sz) break;
+      const headerLen = id.len + sz.len;
+      const dataStart = pos + headerLen;
+
+      if (MASTERS.has(id.value)) {
+        if (id.value === 0x1f43b675) clusterTs = 0; // new cluster
+        pos = dataStart; // descend (don't skip children)
+        continue;
+      }
+      // leaf: need full data present
+      if (sz.unknown) { pos = dataStart; continue; } // unknown-size non-master: skip header, keep walking
+      if (dataStart + sz.value > buf.length) break;   // incomplete leaf — wait for more
+      const data = buf.subarray(dataStart, dataStart + sz.value);
+      switch (id.value) {
+        case ID_TIMESTAMPSCALE: timestampScale = readUint(data) || timestampScale; break;
+        case ID_CODECID: break; // could verify "A_OPUS"
+        case ID_CODECPRIVATE: if (!opusHead) { opusHead = data.slice(); ensureDecoder(); } break;
+        case ID_TRACKNUMBER: if (audioTrack == null) audioTrack = readUint(data); break;
+        case ID_TIMESTAMP: clusterTs = readUint(data); break;
+        case ID_SIMPLEBLOCK:
+        case ID_BLOCK: handleSimpleBlock(data); break;
+        default: break;
+      }
+      pos = dataStart + sz.value;
+    }
+    // Trim consumed prefix to bound memory.
+    if (pos > 1 << 20) { buf = buf.slice(pos); pos = 0; }
+  }
+
+  function feedAudio(u8) {
+    if (!u8 || u8.length === 0) return;
+    buf = concat(buf, u8);
+    try { parse(); } catch (e) { if (once("parse-throw")) warn("parse error:", e && e.message); }
+  }
+
+  // ── MSE hooks ──────────────────────────────────────────────────────────
+  function toU8(d) {
+    if (d instanceof ArrayBuffer) return new Uint8Array(d);
+    if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
     return null;
   }
-
-  // ── (2) MSE: the path that matters under SABR ──────────────────────────
-  // Tag each SourceBuffer audio/video at creation (mime tells us), then watch
-  // what gets appended. Appends happen ahead of the playhead = look-ahead.
   let mseHooked = false;
   try {
     if (typeof MediaSource !== "undefined" && MediaSource.prototype.addSourceBuffer) {
@@ -77,76 +224,31 @@
       MediaSource.prototype.addSourceBuffer = function (mime) {
         const sb = origAdd.apply(this, arguments);
         try {
-          sb.__kflAudio = /audio/i.test(String(mime || ""));
-          log(`MSE SourceBuffer created: "${mime}" ${sb.__kflAudio ? "← AUDIO" : "(video)"}`);
+          sb.__kflAudio = /audio/i.test(String(mime || "")) && /opus|webm/i.test(String(mime || ""));
+          if (sb.__kflAudio) log(`audio SourceBuffer: "${mime}"`);
         } catch {}
         return sb;
       };
-
       const origAppend = SourceBuffer.prototype.appendBuffer;
-      const counts = new WeakMap();
       SourceBuffer.prototype.appendBuffer = function (data) {
-        try {
-          if (this.__kflAudio) {
-            const u8 = toU8(data);
-            const n = (counts.get(this) || 0) + 1;
-            counts.set(this, n);
-            if (u8 && once("mse-audio-first")) {
-              const c = sniffContainer(u8);
-              const enc = sniffEncrypted(u8);
-              log(
-                `MSE AUDIO append #${n}: ${u8.byteLength}B → ${c.container} (${c.codecHint}), ` +
-                (enc ? "ENCRYPTED/DRM ✗" : "clear ✓"),
-              );
-              if ((c.container.startsWith("WebM") || c.container.startsWith("MP4")) && !enc) {
-                log("  ✓✓ FEASIBLE: clean de-UMP'd audio segments are reachable via SourceBuffer — read-ahead can work here");
-              } else if (enc) {
-                warn("  ✗ audio segments look encrypted (DRM) — read-ahead would skip this content");
-              }
-            } else if (u8 && n % 25 === 0) {
-              log(`MSE AUDIO append #${n} (${u8.byteLength}B) — still flowing ahead of playhead`);
-            }
-          }
-        } catch {}
+        try { if (this.__kflAudio) { const u8 = toU8(data); if (u8) feedAudio(u8.slice()); } } catch {}
         return origAppend.apply(this, arguments);
       };
       mseHooked = true;
     }
   } catch {}
-  if (!mseHooked) warn("MediaSource not hookable in this context (MSE may run in a Worker).");
+  if (!mseHooked) warn("MediaSource not hookable here (MSE may run in a Worker).");
 
-  // ── (1) network: legacy GET ranges + SABR/POST detection (informational) ─
-  function isMediaUrl(url) {
-    return typeof url === "string" && url.includes("googlevideo.com") && url.includes("videoplayback");
-  }
-  function noteNetwork(url, method) {
-    let u; try { u = new URL(url, location.origin); } catch { return; }
-    const q = u.searchParams;
-    const mime = decodeURIComponent(q.get("mime") || "");
-    const itag = parseInt(q.get("itag") || "0", 10);
-    const isAudio = mime.startsWith("audio/") || AUDIO_ITAGS.has(itag);
-    const M = String(method || "GET").toUpperCase();
-    if (M === "POST" || q.has("sabr") || q.has("ump")) {
-      if (once("net-sabr")) warn("network: videoplayback via POST/SABR/UMP → not interceptable as ranges (expected on modern YT; using MSE path instead).");
-      return;
-    }
-    if (isAudio && once("net-audio-get-" + itag)) {
-      log(`network: legacy GET audio itag=${itag} mime="${mime}" range=${q.get("range") || "(header)"} — interceptable directly too.`);
-    }
-  }
-
+  // ── light network SABR note (informational) ────────────────────────────
+  const isMedia = (u) => typeof u === "string" && u.includes("googlevideo.com") && u.includes("videoplayback");
   const origFetch = window.fetch;
   window.fetch = function (input, init) {
     try {
       const url = typeof input === "string" ? input : (input && input.url) || "";
-      const method = (init && init.method) || (input && input.method) || "GET";
-      if (isMediaUrl(url)) noteNetwork(url, method);
+      const m = (init && init.method) || "GET";
+      if (isMedia(url) && (String(m).toUpperCase() === "POST" || /[?&](sabr|ump)=/.test(url)) && once("sabr"))
+        warn("network is SABR/POST (using the MSE path).");
     } catch {}
     return origFetch.apply(this, arguments);
-  };
-  const origOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function (method, url) {
-    try { if (isMediaUrl(url)) noteNetwork(url, method); } catch {}
-    return origOpen.apply(this, arguments);
   };
 })();
