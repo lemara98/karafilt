@@ -128,7 +128,11 @@
   function pump() {
     if (!decoder) ensureDecoder();
     if (!decoder) return;
-    const now = videoTime();
+    const v = document.querySelector("video");
+    // Don't consume the packet queue while paused — otherwise the window's worth
+    // of audio gets decoded-then-dropped and resume starts with a silent hole.
+    if (!v || v.paused) return;
+    const now = v.currentTime;
     const horizon = now + DECODE_WINDOW_S;
     let guard = 0;
     while (pkts.length && guard++ < 4000) {
