@@ -281,8 +281,11 @@ function switchMode(mode) {
   if (workletNode) {
     if (mode === "basic") {
       workletNode.port.postMessage({ type: "SET_MODE", value: "basic" });
+    } else if (mode === "stft_deep") {
+      // Spectral Deep: STFT with a relaxed centerness mask (catches backing vocals).
+      workletNode.port.postMessage({ type: "SET_MODE", value: "stft_deep" });
     } else {
-      // "stft", "ai", and "ai2" all use STFT processing in the worklet
+      // "stft", "ai", and "ai2" all use plain STFT processing in the worklet
       workletNode.port.postMessage({ type: "SET_MODE", value: "stft" });
     }
   }

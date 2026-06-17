@@ -23,6 +23,7 @@
 
   const MODE_META = {
     stft: { name: "Spectral", desc: "Balanced quality — keeps bass & stereo", tag: "Recommended", icon: "wave" },
+    stft_deep: { name: "Spectral Deep", desc: "Strips center backing vocals too — thinner mix", tag: "Strong", icon: "wave" },
     basic: { name: "Basic", desc: "Quick center-channel removal", tag: "Fast", icon: "bolt" },
     ai: { name: "AI Separation", desc: "Neural network — the cleanest vocals", tag: "Best", icon: "spark", premium: true },
     ai2: { name: "AI + Deep Clean", desc: "Two-pass AI — removes backing vocals too", tag: "Pro", icon: "spark", premium: true },
