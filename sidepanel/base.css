@@ -721,8 +721,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
   box-shadow: 0 0 6px rgba(248, 113, 113, 0.4);
 }
 
-/* Account-gated (sign in / subscribe / trial ended) and missing-server-URL
-   states: amber — needs user action, but nothing is broken. */
+/* Needs-user-action states: amber — but nothing is broken. */
 .ai-status.gated .ai-status-dot,
 .ai-status.no_server .ai-status-dot {
   background: #facc15;
@@ -829,4 +828,56 @@ footer {
 @keyframes dot-pulse {
   0%, 100% { box-shadow: 0 0 4px rgba(74, 222, 128, 0.4); }
   50% { box-shadow: 0 0 12px rgba(74, 222, 128, 0.7); }
+}
+
+/* ── Auth gate ──────────────────────────────────────────────────────────────
+   Full-surface sign-in overlay. Covers everything (lyrics + controls) until the
+   GET_ACCOUNT_STATUS probe reports the user is signed in on karafilt.com. */
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(11, 14, 26, 0.97);
+  backdrop-filter: blur(6px);
+}
+
+.auth-gate-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  max-width: 280px;
+}
+
+.auth-gate-logo {
+  height: 30px;
+  width: auto;
+  margin-bottom: 4px;
+}
+
+.auth-gate-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #e0e4f0;
+}
+
+.auth-gate-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #9aa1c4;
+}
+
+.auth-gate .btn-toggle {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.auth-gate-hint {
+  font-size: 11px;
+  color: #6b7294;
 }

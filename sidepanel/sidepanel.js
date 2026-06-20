@@ -50,11 +50,6 @@ let currentLineIndex = -1;
 let activeTabId = null;
 let hasMedia = false;
 let lastPlaybackTime = 0;
-// Seconds the AI/server-mode audio lags the original video. The offscreen doc
-// measures it and reports it via AI_LAG; we shift the lyric highlight back by
-// this much so lyrics line up with the delayed backend audio. 0 in all other
-// modes (and when the AI queue drains back to the real-time STFT preview).
-let aiLagSeconds = 0;
 let lastRenderedCount = 0;
 let lastRenderedMode = null;  // "synced" | "plain" | null
 // Karaoke (focus) view: shows only the active line plus its immediate
@@ -457,10 +452,7 @@ function syncToPlaybackTime(t) {
     autoScrollPlainLyrics(t);
     return;
   }
-  // Shift the highlight back by the AI playback lag so lyrics match the
-  // delayed backend audio. aiLagSeconds is 0 in non-AI modes, so this is a
-  // no-op there.
-  const adjusted = t - aiLagSeconds;
+  const adjusted = t;
   // Binary search for the last line with time <= adjusted
   let lo = 0, hi = parsedLines.length - 1, found = -1;
   while (lo <= hi) {
@@ -474,7 +466,7 @@ function syncToPlaybackTime(t) {
   }
   if (syncLogCount++ < 5) {
     dbg(
-      `[KFL-Sidepanel] sync t=${adjusted.toFixed(2)}s (raw=${t.toFixed(2)}, lag=${aiLagSeconds.toFixed(2)}), lines=${parsedLines.length}, ` +
+      `[KFL-Sidepanel] sync t=${adjusted.toFixed(2)}s, lines=${parsedLines.length}, ` +
       `firstTime=${parsedLines[0]?.time?.toFixed(2)}, lastTime=${parsedLines[parsedLines.length - 1]?.time?.toFixed(2)}, ` +
       `found=${found}`
     );
@@ -484,18 +476,6 @@ function syncToPlaybackTime(t) {
     updateWordHighlight(adjusted);
   }
 }
-
-// AI playback-lag update from the offscreen doc (via SW re-broadcast →
-// controls-bindings.js). Re-runs the sync immediately so the highlight shifts
-// without waiting for the next PLAYBACK_TIME tick.
-window.onAILagUpdate = (lag) => {
-  const next = (typeof lag === "number" && isFinite(lag) && lag >= 0) ? lag : 0;
-  if (next === aiLagSeconds) return;
-  aiLagSeconds = next;
-  if (parsedLines.length > 0 && lastPlaybackTime > 0) {
-    syncToPlaybackTime(lastPlaybackTime);
-  }
-};
 
 // --- Active tab tracking ---
 async function getActiveTab() {
@@ -805,40 +785,24 @@ if (spToggleBtn && window.bindKaraokeControls) {
     modeHint: $sp("sp-mode-hint"),
     mixSlider: $sp("sp-mix"),
     mixValue: $sp("sp-mix-value"),
-    aiOptions: $sp("sp-ai-options"),
-    aiModelSelect: $sp("sp-ai-model"),
-    modelHint: $sp("sp-model-hint"),
-    aiStatusEl: $sp("sp-ai-status"),
-    aiStatusText: $sp("sp-ai-status").querySelector(".ai-status-text"),
     settingsToggle: $sp("sp-settings-toggle"),
     settingsPanel: $sp("sp-settings-panel"),
-    serverUrlInput: $sp("sp-server-url"),
-    apiKeyInput: $sp("sp-api-key"),
     websiteUrlInput: $sp("sp-website-url"),
     countdownOverlay: $sp("sp-countdown-overlay"),
     countdownNumber: $sp("sp-countdown-number"),
     countdownCancelBtn: $sp("sp-countdown-cancel"),
+    authGate: $sp("auth-gate"),
+    authGateSignIn: $sp("auth-gate-signin"),
   });
 }
 
 // --- Account chip (karafilt.com session) ──────────────────────────────────
 // The service worker probes GET /api/me with the site's session cookie and
-// reports sign-in + plan state. Hidden entirely when no Website URL is set
-// (self-hosted / offline use).
+// reports sign-in state. When signed in, the chip links to the account page;
+// the full-panel auth gate handles the signed-out case.
 const accountChipEl = document.getElementById("sp-account");
 const accountAvatarEl = document.getElementById("sp-account-avatar");
 const accountEmailEl = document.getElementById("sp-account-email");
-const accountPlanEl = document.getElementById("sp-account-plan");
-
-function accountPlanLabel(acc) {
-  if (acc.emailVerified === false) return "Verify email";
-  if (acc.entitlement === "subscription") return "Pro";
-  if (acc.entitlement === "trial") {
-    const mins = Math.max(0, Math.round((acc.trialSecondsRemaining || 0) / 60));
-    return `Trial · ${mins}m left`;
-  }
-  return "Trial ended";
-}
 
 function refreshAccountStatus() {
   if (!accountChipEl) return;
@@ -847,24 +811,15 @@ function refreshAccountStatus() {
       accountChipEl.style.display = "none";
       return;
     }
-    accountChipEl.style.display = "";
     if (acc.signedIn) {
+      accountChipEl.style.display = "";
       accountChipEl.classList.remove("signed-out");
       accountChipEl.href = acc.accountUrl || "https://karafilt.com/account";
       accountAvatarEl.textContent = ((acc.email && acc.email[0]) || "?").toUpperCase();
       accountEmailEl.textContent = acc.email || "Account";
-      accountPlanEl.textContent = accountPlanLabel(acc);
     } else {
-      accountChipEl.classList.add("signed-out");
-      accountChipEl.href = acc.loginUrl || "https://karafilt.com/login";
-      accountAvatarEl.textContent = "?";
-      if (acc.error === "network") {
-        accountEmailEl.textContent = "Offline";
-        accountPlanEl.textContent = "Can't reach account site";
-      } else {
-        accountEmailEl.textContent = "Sign in";
-        accountPlanEl.textContent = "for AI filtering";
-      }
+      // Signed out → the auth gate covers the panel; no chip needed.
+      accountChipEl.style.display = "none";
     }
   });
 }

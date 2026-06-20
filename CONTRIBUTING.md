@@ -1,30 +1,27 @@
 # Contributing to Karafilt
 
-Thanks for your interest in Karafilt! This repo holds the **Chrome extension** and
-the **Python/Demucs filtering server** (`backend/`). The web app + API lives in the
-companion `website` repo.
+Thanks for your interest in Karafilt! This repo holds the **Chrome extension** —
+all in-browser, no backend server. The web app + API lives in the companion
+`website` repo.
 
 ## Licensing of contributions
-This repo is **dual-licensed by component**:
-- The **browser extension** is **MIT** (`LICENSE`).
-- The **filtering server** under `backend/` is **AGPL-3.0** (`backend/LICENSE`).
-
-By submitting a contribution you agree to license it under the license that
-applies to the directory you're modifying. Don't paste code from other projects
-unless its license is compatible and you attribute it.
+The Karafilt browser extension is **MIT** (`LICENSE`). By submitting a
+contribution you agree to license it under MIT. Don't paste code from other
+projects unless its license is compatible and you attribute it.
 
 ## Getting started
 1. Read [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for how the pieces fit
    together, and [`README.md`](./README.md) for install/build steps.
 2. Load the unpacked extension (`chrome://extensions` → Developer mode → Load
    unpacked).
-3. For backend work, see the "Running the Backend Server" section of the README.
+3. The WASM module is built with Emscripten (`make phase2`) — see the README.
 
 ## Ground rules
 - Keep changes small and focused; one logical change per PR.
-- The **free in-browser path must keep working with no server and no account.**
-- Don't add lyric transcription/alignment to the backend — lyrics are a pure
-  third-party database lookup by design (see `docs/ARCHITECTURE.md`).
+- All vocal filtering runs **locally in the browser via WebAssembly** — keep it
+  that way; don't add an audio backend.
+- Don't add lyric transcription/alignment — lyrics are a pure third-party
+  database lookup by design (see `docs/ARCHITECTURE.md`).
 - Match the surrounding code style. Run any existing tests
   (`node test/song-match.test.mjs`) before opening a PR.
 - Be clear in your PR description about what you changed and how you verified it.
