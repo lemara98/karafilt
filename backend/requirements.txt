@@ -1,8 +1,0 @@
-demucs>=4.0
-torch>=2.0
-torchaudio
-websockets
-numpy
-pyjwt>=2.8   # Phase 3: verify website-issued filter tokens (set FILTER_JWT_SECRET)
-# Optional: install for BS-Roformer, Mel-Roformer, MDX23C, UVR models
-# audio-separator>=0.17

@@ -12,7 +12,7 @@
   <strong>🌐 <a href="https://karafilt.com">karafilt.com</a></strong>
 </p>
 
-**Real-time vocal removal for any browser tab.** Turn any song playing in Chrome into a karaoke track — no downloads, no uploads, just click and sing.
+**Real-time vocal removal for any browser tab.** Turn any song playing in Chrome into a karaoke track — no downloads, no uploads, just sign in and sing. Free.
 
 <p align="center">
   <img src="store-assets/screenshot-1-hero.png" alt="Karafilt side panel showing synced lyrics over a YouTube video" width="820">
@@ -20,7 +20,7 @@
 
 ## How It Works
 
-Karafilt captures audio from your active browser tab and removes the vocals in real time. It works with YouTube, Spotify Web Player, SoundCloud, or any website that plays audio.
+Karafilt captures audio from your active browser tab and removes the vocals in real time, entirely in your browser. It works with YouTube, Spotify Web Player, SoundCloud, or any website that plays audio. The audio never leaves your machine.
 
 <p align="center">
   <img src="store-assets/screenshot-2-focus.png" alt="Karafilt karaoke focus mode" width="820">
@@ -28,18 +28,16 @@ Karafilt captures audio from your active browser tab and removes the vocals in r
 
 ### Processing Modes
 
-| Mode | Quality | Latency | Requires Server |
-|------|---------|---------|-----------------|
-| **Spectral (Good)** | Medium | Real-time | No |
-| **Basic (Fast)** | Lower | Real-time | No |
-| **AI Separation (Best)** | High | Relatively small | Yes |
-| **AI + Deep Clean** | Highest | Relatively small | Yes |
+| Mode | Quality | Latency |
+|------|---------|---------|
+| **Spectral (Good)** | Medium | Real-time |
+| **Spectral Deep (Strong)** | Higher (strips center backing vocals) | Real-time |
+| **Basic (Fast)** | Lower | Real-time |
 
-- **Spectral** and **Basic** modes run entirely in your browser using WebAssembly — no server needed.
-- **AI** modes use neural network vocal separation (Demucs) for significantly better quality, but require a backend server for processing.
+All three modes run entirely in your browser using WebAssembly — no server, no uploads.
 
 <p align="center">
-  <img src="store-assets/screenshot-3-modes.png" alt="Karafilt processing mode dropdown showing all four modes" width="820">
+  <img src="store-assets/screenshot-3-modes.png" alt="Karafilt processing mode dropdown" width="820">
 </p>
 
 When a track has multiple matches (covers, live versions, remixes), pick the right one from the alternatives picker:
@@ -54,7 +52,7 @@ When a track has multiple matches (covers, live versions, remixes), pick the rig
 
 **[Install Karafilt from the Chrome Web Store →](https://chromewebstore.google.com/detail/eiclobknpdiipnhdpfpegfnkplmfnmoo)**
 
-Then create an account and unlock Pro AI filtering at **[karafilt.com](https://karafilt.com)**.
+Karafilt is free — just create an account at **[karafilt.com](https://karafilt.com)** and sign in from the extension.
 
 ### Manual Install (Developer Mode)
 
@@ -66,20 +64,14 @@ Then create an account and unlock Pro AI filtering at **[karafilt.com](https://k
 
 ## Usage
 
-1. Play a song in any tab (YouTube, Spotify, etc.)
-2. Click the Karafilt extension icon
-3. Choose a processing mode
-4. Adjust the **Vocal Removal** slider (0-100%)
-5. Click **Start Filtering**
+1. Click the Karafilt extension icon to open the side panel
+2. Sign in with your free Karafilt account
+3. Play a song in any tab (YouTube, Spotify, etc.)
+4. Choose a processing mode
+5. Adjust the **Vocal Removal** slider (0-100%)
+6. Click **Start Filtering**
 
-### Settings
-
-Click the gear icon in the popup to configure:
-
-- **Server URL** — WebSocket endpoint for AI processing (default: `ws://localhost:9876`)
-- **API Key** — Authentication token for hosted backends
-
-Your settings (mode, slider position, model, server URL) are saved automatically and persist across sessions.
+Your settings (mode, slider position) are saved automatically and persist across sessions.
 
 ---
 
@@ -89,39 +81,28 @@ Your settings (mode, slider position, model, server URL) are saved automatically
 
 Karafilt spans **two repositories**:
 
-- **`karaoke-filter-plugin`** (this repo) — the Chrome extension + the Python/Demucs
-  real-time filtering server (`backend/`).
-- **`website`** — the Next.js web app + API: accounts, email verification, billing,
-  reviews, donations, and the trial/subscription ledger.
+- **`karaoke-filter-plugin`** (this repo) — the Chrome extension (all in-browser; no
+  backend server).
+- **`website`** — the Next.js web app + API: free accounts, email verification,
+  reviews, donations, and self-serve account deletion.
 
-The two run as **separate servers** that cooperate through a small signed-token
-contract (the website is the single source of truth for accounts and the one-time
-trial meter; the filtering server only verifies a token). The full design is in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and the build plan that drives the
-current refactor is in [`docs/BUILD_BRIEF.md`](docs/BUILD_BRIEF.md).
+The extension uses the website only to confirm the user is signed in (a cookie-based
+`/api/me` probe) — there is no audio backend; all processing runs locally in the
+extension.
 
 ### Architecture
 
 ```
 Browser Extension (Chrome Manifest V3)
-  ├── popup/          — UI controls (mode, mix slider, settings)
-  ├── service-worker  — orchestrates capture lifecycle
-  ├── offscreen.js    — audio capture & processing (Web Audio API)
-  ├── worklet-processor.js — real-time WASM processing on audio thread
+  ├── sidepanel/      — main UI (lyrics, mode, mix slider, sign-in gate)
+  ├── service-worker  — orchestrates capture lifecycle + lyrics lookups
+  ├── offscreen.js    — audio capture (Web Audio API)
+  ├── worklet-processor.js — real-time WASM processing on the audio thread
   └── wasm/           — C source & compiled WebAssembly (STFT, center-cancel)
-
-Backend Server (Python)
-  ├── server.py             — WebSocket server entry point
-  ├── websocket_handler.py  — client connection handler + auth
-  ├── backends.py           — Demucs & audio-separator wrappers
-  └── models.py             — model registry
 ```
 
-Audio flows through two parallel pipelines:
-1. **WASM pipeline** (always active) — real-time spectral processing via AudioWorklet
-2. **AI pipeline** (optional) — 5-second chunks sent to the backend via WebSocket, results crossfaded in
-
-The WASM pipeline serves as an instant preview while AI chunks are being processed.
+Audio is captured from the active tab and processed in real time by the WASM
+AudioWorklet — spectral / center-channel vocal cancellation, never uploaded.
 
 ### Building the WASM Module
 
@@ -131,65 +112,12 @@ Requires [Emscripten](https://emscripten.org/docs/getting_started/downloads.html
 make phase2   # builds wasm/build/vocal_remove.wasm
 ```
 
-### Running the Backend Server
-
-```bash
-cd backend
-./setup.sh            # creates venv, installs dependencies
-source venv/bin/activate
-python server.py      # starts on ws://localhost:9876
-```
-
-Options:
-```
---port 9876           # WebSocket port (default: 9876)
---device auto         # cpu, cuda, or auto (default: auto)
---auth-token SECRET   # require clients to authenticate
---workers 4           # per-session AI worker pool size (default 4, env: KARAFILT_WORKERS)
-```
-
-The server auto-detects GPU (CUDA) and falls back to CPU. First run downloads the Demucs model (~1.5GB).
-
-Each session spawns `--workers` concurrent Demucs inferences fed from a per-session queue; results are reordered before being sent back. On a single GPU, CUDA serializes compute so the throughput speedup vs. 1 worker is bounded by CPU prep overlap — lower `--workers` if VRAM is tight (each in-flight chunk uses ~1 GB on top of model weights).
-
-### Supported AI Models
-
-**Demucs** (built-in):
-- `htdemucs` — Hybrid Transformer (default, quality sweet spot)
-- `htdemucs_ft` — Fine-tuned (highest quality, slow, high VRAM)
-- `mdx_extra` — MDX variant
-- `mdx_extra_q` — MDX quantized (fastest, lower quality)
-
-**Audio Separator** (optional, install separately):
-- BS-Roformer, Mel-Roformer, MDX23C, UVR-MDX-NET
-
-### WebSocket Protocol
-
-- **Text messages**: JSON commands (`auth`, `set_model`, `set_two_pass`, `get_models`, `ping`)
-- **Binary messages**: 8-byte header (uint32 sample_rate + uint32 num_samples) + interleaved float32 PCM
-
-### Authentication
-
-When running with `--auth-token`, clients must send an auth message before any other commands:
-
-```json
-{"type": "auth", "token": "your-secret-token"}
-```
-
 ## License
 
-Karafilt is open source, licensed **by component**:
+The Karafilt browser extension is open source under the **MIT License** — see
+[`LICENSE`](LICENSE).
 
-- The **browser extension** (everything outside `backend/`) is **MIT** — see
-  [`LICENSE`](LICENSE).
-- The **Python real-time vocal-separation server** under [`backend/`](backend/) is
-  **AGPL-3.0** — see [`backend/LICENSE`](backend/LICENSE). The copyleft terms mean
-  anyone who runs a modified version of the server as a network service must make
-  their source available; this keeps the hosted-backend ecosystem open.
-
-Third-party dependencies (Demucs, PyTorch, Next.js, etc.) remain under their own
-licenses. Choosing MIT/AGPL for this project's own code does not affect or
-conflict with them.
+Third-party dependencies (Next.js, etc.) remain under their own licenses.
 
 Copyright © 2026 Betania.io.
 
