@@ -12,7 +12,6 @@ let offscreenReady = false;
 let currentMode = "stft";
 let capturedTabId = null;
 let capturedTabUrl = null;
-let currentAIStatus = { status: "idle", detail: null };
 
 // The side panel is PINNED to one tab at a time: disabled by default
 // everywhere, enabled only for the tab the user invoked Karafilt on (icon
@@ -593,23 +592,9 @@ async function fetchFromLRCLib(artist, track, opts) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Handle AI_STATUS / AI_LAG / seek messages from the offscreen document
+  // Messages from the offscreen document. (AI status/lag/seek are gone now that
+  // all processing runs in-browser in the worklet.)
   if (sender.url && sender.url.includes("offscreen.html")) {
-    if (message.type === "AI_STATUS") {
-      currentAIStatus = { status: message.status, detail: message.detail || null };
-      // Re-broadcast so the popup receives it
-      chrome.runtime.sendMessage(message).catch(() => {});
-    } else if (message.type === "AI_LAG") {
-      // Re-broadcast the AI playback-lag value to the side panel so it can
-      // shift the lyric highlight to match the delayed backend audio.
-      chrome.runtime.sendMessage(message).catch(() => {});
-    } else if (message.type === "MEDIA_SEEK_RELATIVE") {
-      // Forward the AI sync seek request to the captured tab's content
-      // script, which is the only context that can poke the <video> element.
-      if (capturedTabId !== null) {
-        chrome.tabs.sendMessage(capturedTabId, message).catch(() => {});
-      }
-    }
     return;
   }
 
@@ -619,8 +604,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "START_CAPTURE":
       if (message.mode) currentMode = message.mode;
       dbg("[SW] START_CAPTURE mode:", currentMode, "tabId:", message.tabId);
-      handleStartCapture(message.tabId, message.aiModel, message.streamId).then((result) => {
-        // Broadcast capture state so popup AND side panel both reflect it.
+      handleStartCapture(message.tabId, message.streamId).then((result) => {
+        // Broadcast capture state so all surfaces reflect it.
         if (result && result.success) {
           chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
         }
@@ -631,7 +616,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "START_CAPTURE_DISPLAY_MEDIA":
       if (message.mode) currentMode = message.mode;
       dbg("[SW] START_CAPTURE_DISPLAY_MEDIA mode:", currentMode, "tabId:", message.tabId);
-      handleStartCaptureViaDisplayMedia(message.tabId, message.aiModel).then((result) => {
+      handleStartCaptureViaDisplayMedia(message.tabId).then((result) => {
         if (result && result.success) {
           chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
         }
@@ -653,34 +638,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "SET_MODE":
       currentMode = message.value;
-      if (isAIMode(message.value)) {
-        // Switching to AI mid-session: fetch a filter token first (if a Website
-        // URL is configured) and push it before the offscreen WS reconnects.
-        resolveAuthToken(message.value, null).then((r) => {
-          if (r.gated) {
-            currentMode = "stft";
-            broadcastAIGated(r.gated);
-            chrome.runtime.sendMessage({ type: "SET_MODE", value: "stft" });
-          } else {
-            if (r.token) chrome.runtime.sendMessage({ type: "SET_API_KEY", value: r.token });
-            chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
-          }
-        });
-      } else {
-        chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
-      }
-      break;
-
-    case "SET_AI_MODEL":
-      chrome.runtime.sendMessage({ type: "SET_AI_MODEL", value: message.value });
-      break;
-
-    case "SET_SERVER_URL":
-      chrome.runtime.sendMessage({ type: "SET_SERVER_URL", value: message.value });
-      break;
-
-    case "SET_API_KEY":
-      chrome.runtime.sendMessage({ type: "SET_API_KEY", value: message.value });
+      chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
       break;
 
     case "FETCH_LYRICS": {
@@ -709,23 +667,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       break;
 
-    case "GET_AI_MODELS":
-      (async () => {
-        await ensureOffscreenDocument();
-        const settings = await chrome.storage.local.get({
-          serverUrl: "",
-          apiKey: "",
-        });
-        chrome.runtime.sendMessage({
-          type: "GET_AI_MODELS",
-          serverUrl: await resolveServerUrl(settings.serverUrl),
-          apiKey: settings.apiKey,
-        }, sendResponse);
-      })();
-      return true; // async response
-
     case "GET_STATE":
-      sendResponse({ isActive: capturedTabId !== null, aiStatus: currentAIStatus });
+      sendResponse({ isActive: capturedTabId !== null });
       return false;
 
     case "OPEN_LOGIN":
@@ -760,7 +703,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "GET_ACCOUNT_STATUS":
       // Session probe for the side panel's account chip. Uses the same
-      // cookie-carrying fetch as getFilterToken, but read-only (/api/me).
+      // cookie-carrying fetch against the site session, read-only (/api/me).
       (async () => {
         const { websiteUrl } = await chrome.storage.local.get({
           websiteUrl: "https://karafilt.com",
@@ -778,7 +721,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           );
           if (res.ok) {
             const me = await res.json();
-            cacheProvidedServerUrl(me.serverUrl);
             sendResponse({ signedIn: true, ...me, accountUrl: `${base}/account` });
           } else {
             sendResponse({ signedIn: false, status: res.status, loginUrl: `${base}/login` });
@@ -874,97 +816,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-// Cross-browser fallback when the side-panel button can't grant the
-// activeTab gesture tabCapture needs (Brave/Edge/Vivaldi). The offscreen
-// document calls navigator.mediaDevices.getDisplayMedia() instead, which
-// ── Phase 5: Pro account / filter-token gating ──────────────────────────────
-// When a Website URL is configured AND an AI mode is requested, fetch a
-// short-lived filter token from the website and use it as the backend auth
-// token. Defaults to the production site; clearing the field in Settings
-// disables gating entirely (local/self-hosted use — static apiKey only).
-// Keep the default in sync with DEFAULTS.websiteUrl in shared/controls-bindings.js.
-function isAIMode(m) {
-  return m === "ai" || m === "ai2";
-}
-
-// The website provisions the Pro AI server address (AI_SERVER_URL env on the
-// site, returned by /api/me and /api/filter-token). Cache it for the session
-// so capture flows can pick it up without an extra round-trip.
-function cacheProvidedServerUrl(url) {
-  if (typeof url === "string" && url) {
-    chrome.storage.session.set({ providedServerUrl: url });
-  }
-}
-
-// Effective AI server address: the user's explicit Settings entry wins
-// (self-hosting); otherwise whatever the website provisioned; otherwise none.
-async function resolveServerUrl(storedServerUrl) {
-  if (storedServerUrl) return storedServerUrl;
-  try {
-    const { providedServerUrl } = await chrome.storage.session.get({ providedServerUrl: null });
-    return providedServerUrl || "";
-  } catch {
-    return "";
-  }
-}
-
-async function getFilterToken() {
-  const { websiteUrl } = await chrome.storage.local.get({ websiteUrl: "https://karafilt.com" });
-  const base = (websiteUrl || "").trim().replace(/\/+$/, "");
-  if (!base) return { disabled: true };
-  try {
-    const res = await fetchWithTimeout(
-      `${base}/api/filter-token`,
-      { method: "POST", credentials: "include", headers: { Accept: "application/json" } },
-      8000,
-    );
-    if (res.ok) {
-      const data = await res.json();
-      cacheProvidedServerUrl(data.serverUrl);
-      return { ok: true, token: data.token, entitlement: data.entitlement };
-    }
-    let reason = null;
-    try { reason = (await res.json()).reason; } catch {}
-    return { ok: false, status: res.status, reason };
-  } catch {
-    return { ok: false, status: 0, reason: "network" };
-  }
-}
-
-// Resolve the backend auth token for a capture. For AI modes with a configured
-// website this is the filter token; otherwise the static apiKey. Returns
-// { token } on success, or { token, gated } when AI is requested but blocked.
-async function resolveAuthToken(mode, apiKey) {
-  if (!isAIMode(mode)) return { token: apiKey };
-  const r = await getFilterToken();
-  if (r.disabled) return { token: apiKey };   // gating off — legacy behaviour
-  if (r.ok) return { token: r.token };
-  const reason =
-    r.status === 401 ? "signin" :
-    r.status === 403 ? "verify_email" :
-    r.status === 402 ? (r.reason || "subscribe") :
-    "network";
-  return { token: apiKey, gated: reason };
-}
-
-function broadcastAIGated(reason) {
-  const messages = {
-    signin: "Sign in on the website to use AI filtering",
-    verify_email: "Verify your email to use AI filtering",
-    subscribe: "Subscribe to use AI filtering",
-    no_subscription: "Subscribe to use AI filtering",
-    trial_exhausted: "Free trial used up — subscribe for AI filtering",
-    trial_expired: "Trial period ended — subscribe for AI filtering",
-    network: "Can't reach the account server — using free mode",
-  };
-  const detail = messages[reason] || "AI filtering unavailable — using free mode";
-  chrome.runtime.sendMessage({ type: "AI_STATUS", status: "gated", detail }).catch(() => {});
-}
-
-// shows the browser's "Choose what to share" picker. The user selects the
-// tab, checks "Share audio", and capture proceeds through the same
-// post-stream pipeline as the tabCapture path.
-async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
+// Cross-browser fallback when the side-panel button can't grant the activeTab
+// gesture tabCapture needs (Brave/Edge/Vivaldi). The offscreen document calls
+// navigator.mediaDevices.getDisplayMedia() instead, which shows the browser's
+// "Choose what to share" picker. The user selects the tab, checks "Share
+// audio", and capture proceeds through the same post-stream pipeline as the
+// tabCapture path.
+async function handleStartCaptureViaDisplayMedia(tabId) {
   try {
     if (capturedTabId !== null) {
       capturedTabId = null;
@@ -974,28 +832,13 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
     }
     const tab = await chrome.tabs.get(tabId);
     await ensureOffscreenDocument();
-    const settings = await chrome.storage.local.get({
-      serverUrl: "",
-      apiKey: "",
-    });
-
-    // Phase 5: filter token for AI modes (see handleStartCapture).
-    let authToken = settings.apiKey;
-    if (isAIMode(currentMode)) {
-      const r = await resolveAuthToken(currentMode, settings.apiKey);
-      if (r.gated) { currentMode = "stft"; broadcastAIGated(r.gated); }
-      else authToken = r.token;
-    }
 
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
-    dbg("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode, "aiModel:", aiModel);
+    dbg("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode);
     chrome.runtime.sendMessage({
       type: "START_VIA_DISPLAY_MEDIA",
       mode: currentMode,
-      aiModel: aiModel,
-      serverUrl: await resolveServerUrl(settings.serverUrl),
-      apiKey: authToken,
     });
     return { success: true };
   } catch (err) {
@@ -1004,7 +847,7 @@ async function handleStartCaptureViaDisplayMedia(tabId, aiModel) {
   }
 }
 
-async function handleStartCapture(tabId, aiModel, providedStreamId) {
+async function handleStartCapture(tabId, providedStreamId) {
   try {
     // Stop any existing capture first
     if (capturedTabId !== null) {
@@ -1021,27 +864,11 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
     await ensureOffscreenDocument();
     dbg("[SW] offscreen document ready");
 
-    // Push current settings to the offscreen document (it can't access chrome.storage)
-    const settings = await chrome.storage.local.get({
-      serverUrl: "",
-      apiKey: "",
-    });
-
-    // Phase 5: for AI modes with a configured Website URL, fetch a filter token
-    // and use it as the backend auth token; otherwise use the static apiKey. If
-    // AI is requested but not entitled, fall back to free spectral mode.
-    let authToken = settings.apiKey;
-    if (isAIMode(currentMode)) {
-      const r = await resolveAuthToken(currentMode, settings.apiKey);
-      if (r.gated) { currentMode = "stft"; broadcastAIGated(r.gated); }
-      else authToken = r.token;
-    }
-
-    // Prefer the streamId captured by the side panel/popup click handler —
-    // that path keeps the activeTab user gesture intact. Fall back to
-    // fetching one here for legacy callers; that path will fail with
-    // "Extension has not been invoked for the current page" if the user
-    // hasn't re-invoked the extension on this tab recently.
+    // Prefer the streamId captured by the side panel click handler — that path
+    // keeps the activeTab user gesture intact. Fall back to fetching one here
+    // for legacy callers; that path will fail with "Extension has not been
+    // invoked for the current page" if the user hasn't re-invoked the extension
+    // on this tab recently.
     const streamId = providedStreamId || await chrome.tabCapture.getMediaStreamId({
       targetTabId: tabId,
     });
@@ -1051,14 +878,11 @@ async function handleStartCapture(tabId, aiModel, providedStreamId) {
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
 
-    dbg("[SW] sending STREAM_READY, mode:", currentMode, "aiModel:", aiModel);
+    dbg("[SW] sending STREAM_READY, mode:", currentMode);
     chrome.runtime.sendMessage({
       type: "STREAM_READY",
       streamId: streamId,
       mode: currentMode,
-      aiModel: aiModel,
-      serverUrl: await resolveServerUrl(settings.serverUrl),
-      apiKey: authToken,
     });
 
     return { success: true };
