@@ -46,6 +46,8 @@ for d in "${DIRS[@]}"; do cp -r "$d" "$STAGE/"; done
 # only invite Chrome Web Store review questions.
 mkdir -p "$STAGE/content"
 cp content/lyrics-overlay.js "$STAGE/content/"
+cp content/yt-rating-badges.js "$STAGE/content/"
+cp content/yt-rating-badges.css "$STAGE/content/"
 mkdir -p "$STAGE/wasm/build"
 cp wasm/build/vocal_remove.wasm "$STAGE/wasm/build/"
 

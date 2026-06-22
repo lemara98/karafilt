@@ -121,6 +121,26 @@
         </div>
       </div>
 
+      <!-- Filter rating: how well did vocal removal work on this song? Tied to
+           the current song + active mode; sidepanel.js shows it only when a
+           song is playing and hides it after submit. -->
+      <div class="section filter-rating" id="sp-rating" style="display:none">
+        <div class="section-header">
+          <label>Rate the filter on this song</label>
+        </div>
+        <div class="community-rating" id="sp-community-rating"></div>
+        <div class="rating-stars" id="sp-rating-stars" role="radiogroup" aria-label="Filter quality rating">
+          <button type="button" class="star" data-value="1" aria-label="1 star">★</button>
+          <button type="button" class="star" data-value="2" aria-label="2 stars">★</button>
+          <button type="button" class="star" data-value="3" aria-label="3 stars">★</button>
+          <button type="button" class="star" data-value="4" aria-label="4 stars">★</button>
+          <button type="button" class="star" data-value="5" aria-label="5 stars">★</button>
+        </div>
+        <textarea id="sp-rating-comment" class="text-input rating-comment" rows="2" maxlength="2000" placeholder="Optional: what worked or didn't?"></textarea>
+        <button id="sp-rating-submit" class="btn-toggle" disabled>Submit rating</button>
+        <span class="hint" id="sp-rating-status"></span>
+      </div>
+
       <div class="settings-row">
         <!-- Account chip: karafilt.com session state (sidepanel.js fills it;
              hidden when no Website URL is configured). -->

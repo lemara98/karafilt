@@ -653,3 +653,83 @@ body { width: 100% !important; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── Filter rating ── */
+.community-rating {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #b0b4d0;
+  margin-bottom: 8px;
+}
+
+.community-rating .cr-stars {
+  color: #fbbf24;
+  letter-spacing: 1px;
+}
+
+.community-rating .cr-count {
+  color: #8b90b0;
+}
+
+.community-rating.cr-empty {
+  color: #8b90b0;
+}
+
+.filter-rating .rating-stars {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.filter-rating .star {
+  background: none;
+  border: none;
+  padding: 2px;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  color: #3a3e5a;
+  transition: color 0.15s, transform 0.1s;
+}
+
+.filter-rating .star:hover {
+  transform: scale(1.12);
+}
+
+/* Light up the hovered star and all before it (CSS-only preview). */
+.filter-rating .rating-stars:hover .star {
+  color: #fbbf24;
+}
+.filter-rating .rating-stars .star:hover ~ .star {
+  color: #3a3e5a;
+}
+
+/* Committed selection (set by JS via .selected on stars up to the rating). */
+.filter-rating .star.selected {
+  color: #fbbf24;
+}
+
+.filter-rating .rating-comment {
+  resize: vertical;
+  margin-bottom: 8px;
+}
+
+.filter-rating .btn-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#sp-rating-status {
+  display: block;
+  margin-top: 6px;
+}
+
+#sp-rating-status.ok {
+  color: #4ade80;
+}
+
+#sp-rating-status.err {
+  color: #f87171;
+}
