@@ -243,6 +243,7 @@ if (refreshBtn) {
 function makeLineEl(line, index) {
   const div = document.createElement("div");
   div.className = "line";
+  div.dir = "auto"; // per-line bidi: RTL scripts (Arabic/Hebrew/…) auto-detected
   div.dataset.index = String(index);
   // Split into word + whitespace tokens so each word can be styled individually
   // for karaoke highlighting. Whitespace stays as plain text nodes so wrapping
@@ -323,6 +324,7 @@ function renderLines(mode) {
     for (const line of plainLyrics.split(/\r?\n/)) {
       const div = document.createElement("div");
       div.className = "line";
+      div.dir = "auto"; // per-line bidi: RTL scripts (Arabic/Hebrew/…) auto-detected
       div.textContent = line;
       linesEl.appendChild(div);
     }
