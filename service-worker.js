@@ -730,6 +730,82 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       })();
       return true; // async response
+
+    case "SUBMIT_FILTER_RATING":
+      // Forward a per-song filter rating to the website. Same cookie-carrying
+      // fetch as the account probe (the user's site session authenticates it).
+      (async () => {
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false, error: "no_site" });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/filter-ratings`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify(message.rating || {}),
+            },
+            8000,
+          );
+          sendResponse({ ok: res.ok, status: res.status });
+        } catch {
+          sendResponse({ ok: false, error: "network" });
+        }
+      })();
+      return true; // async response
+
+    case "GET_FILTER_RATING_STATS":
+      // Public aggregate ratings for a batch of video keys. Used by the side
+      // panel (one key) and the YouTube thumbnail badges (many). Routed through
+      // the SW so its host permission bypasses CORS for the cross-origin call.
+      (async () => {
+        const keys = Array.isArray(message.keys) ? message.keys : [];
+        if (keys.length === 0) {
+          sendResponse({ ok: true, stats: {} });
+          return;
+        }
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false, stats: {} });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/filter-ratings/stats`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({ keys }),
+            },
+            8000,
+          );
+          if (res.ok) {
+            const data = await res.json();
+            sendResponse({ ok: true, stats: data.stats || {} });
+          } else {
+            sendResponse({ ok: false, status: res.status, stats: {} });
+          }
+        } catch {
+          sendResponse({ ok: false, error: "network", stats: {} });
+        }
+      })();
+      return true; // async response
   }
 });
 

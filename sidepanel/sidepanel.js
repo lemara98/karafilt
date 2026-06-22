@@ -640,6 +640,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     if (parsedLines.length > 0 && lastPlaybackTime > 0) {
       syncToPlaybackTime(lastPlaybackTime);
     }
+
+    // Show/refresh the per-song rating widget for the current song.
+    updateRatingWidget();
   } else if (message.type === "PLAYBACK_TIME") {
     lastPlaybackTime = message.time;
     if (typeof message.duration === "number") {
@@ -689,6 +692,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     lastKnownUrl = changeInfo.url;
     // Clear immediately so stale lyrics don't linger
     resetDisplay("Loading...");
+    // New song → reset the rating widget (a fresh LYRICS_STATE will re-show it).
+    updateRatingWidget();
     // Give the page a moment to load the content script, then rebind
     setTimeout(() => {
       if (tabId === activeTabId) bindToPinnedTab();
@@ -853,6 +858,163 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   if (sender.tab) return; // only service-worker broadcasts
   if (message.type === "ACCOUNT_CHANGED") refreshAccountStatus();
 });
+
+// --- Filter rating (per song) ─────────────────────────────────────────────
+// "How well did vocal removal work on this song?" — a 1–5 star rating + an
+// optional comment, tied to the current song (a stable video key) and the
+// active filter mode. Sent to the website via the service worker; one rating
+// per user per song (the backend upserts), so re-rating a song updates it.
+const ratingSectionEl = document.getElementById("sp-rating");
+const communityRatingEl = document.getElementById("sp-community-rating");
+const ratingStarsEl = document.getElementById("sp-rating-stars");
+const ratingCommentEl = document.getElementById("sp-rating-comment");
+const ratingSubmitEl = document.getElementById("sp-rating-submit");
+const ratingStatusEl = document.getElementById("sp-rating-status");
+const ratingStarBtns = ratingStarsEl
+  ? Array.from(ratingStarsEl.querySelectorAll(".star"))
+  : [];
+
+let selectedRating = 0;
+let ratingWidgetKey = null; // video key the widget is currently showing
+
+// Normalize a tab URL to a stable per-song key. YouTube collapses to the video
+// id (survives playlist/timestamp params); everything else uses host + path.
+function deriveVideoKey(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (/(^|\.)youtube\.com$/.test(host)) {
+      const v = u.searchParams.get("v");
+      if (v) return "yt:" + v;
+    }
+    if (host === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      if (id) return "yt:" + id;
+    }
+    return host + u.pathname.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function paintStars() {
+  for (const btn of ratingStarBtns) {
+    const v = Number(btn.dataset.value);
+    btn.classList.toggle("selected", v <= selectedRating);
+  }
+  if (ratingSubmitEl) ratingSubmitEl.disabled = selectedRating < 1;
+}
+
+function resetRatingWidget() {
+  selectedRating = 0;
+  if (ratingCommentEl) ratingCommentEl.value = "";
+  if (ratingStatusEl) {
+    ratingStatusEl.textContent = "";
+    ratingStatusEl.className = "hint";
+  }
+  paintStars();
+}
+
+// Render a 0–5 average as filled/empty stars (rounded to nearest whole star).
+function starString(avg) {
+  const n = Math.max(0, Math.min(5, Math.round(avg)));
+  return "★".repeat(n) + "☆".repeat(5 - n);
+}
+
+// Fetch and show the community average for a video key. Always shows the count
+// (even for 1 rating); shows a "be the first" prompt when there are none.
+function loadCommunityRating(key) {
+  if (!communityRatingEl) return;
+  communityRatingEl.textContent = "";
+  communityRatingEl.className = "community-rating";
+  chrome.runtime.sendMessage(
+    { type: "GET_FILTER_RATING_STATS", keys: [key] },
+    (res) => {
+      if (chrome.runtime.lastError || !res || !res.ok) return;
+      // Guard against a stale response after the song already changed.
+      if (key !== ratingWidgetKey) return;
+      const stat = res.stats && res.stats[key];
+      if (stat && stat.count > 0) {
+        communityRatingEl.innerHTML =
+          `<span class="cr-stars">${starString(stat.avg)}</span>` +
+          `<span>${stat.avg.toFixed(1)}</span>` +
+          `<span class="cr-count">· ${stat.count} ` +
+          `rating${stat.count === 1 ? "" : "s"}</span>`;
+      } else {
+        communityRatingEl.classList.add("cr-empty");
+        communityRatingEl.textContent = "No ratings yet — be the first.";
+      }
+    },
+  );
+}
+
+// Show the widget when a song is playing; reset it when the song changes so
+// each song is rated fresh.
+function updateRatingWidget() {
+  if (!ratingSectionEl) return;
+  const key = hasMedia ? deriveVideoKey(lastKnownUrl) : null;
+  if (!key) {
+    ratingSectionEl.style.display = "none";
+    ratingWidgetKey = null;
+    return;
+  }
+  ratingSectionEl.style.display = "";
+  if (key !== ratingWidgetKey) {
+    ratingWidgetKey = key;
+    resetRatingWidget();
+    loadCommunityRating(key);
+  }
+}
+
+for (const btn of ratingStarBtns) {
+  btn.addEventListener("click", () => {
+    selectedRating = Number(btn.dataset.value) || 0;
+    paintStars();
+  });
+}
+
+if (ratingSubmitEl) {
+  ratingSubmitEl.addEventListener("click", () => {
+    if (selectedRating < 1) return;
+    const match = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
+    const modeSel = document.getElementById("sp-mode");
+    const payload = {
+      videoKey: deriveVideoKey(lastKnownUrl),
+      videoUrl: lastKnownUrl || null,
+      songTitle: lastCleanedTitle || null,
+      trackName: (match && match.trackName) || null,
+      artistName: (match && match.artistName) || null,
+      filterMode: (modeSel && modeSel.value) || null,
+      rating: selectedRating,
+      comment: (ratingCommentEl && ratingCommentEl.value.trim()) || null,
+      extensionVersion: chrome.runtime.getManifest().version,
+    };
+    if (!payload.videoKey) return;
+
+    ratingSubmitEl.disabled = true;
+    ratingStatusEl.textContent = "Submitting…";
+    ratingStatusEl.className = "hint";
+    chrome.runtime.sendMessage(
+      { type: "SUBMIT_FILTER_RATING", rating: payload },
+      (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          ratingStatusEl.textContent =
+            res && res.status === 401
+              ? "Please sign in to rate."
+              : "Couldn't submit — try again.";
+          ratingStatusEl.className = "hint err";
+          ratingSubmitEl.disabled = false;
+          return;
+        }
+        ratingStatusEl.textContent = "Thanks for the feedback!";
+        ratingStatusEl.className = "hint ok";
+        // Reflect the new rating in the community average.
+        if (payload.videoKey) loadCommunityRating(payload.videoKey);
+      },
+    );
+  });
+}
 
 // --- Init ---
 bindToPinnedTab();
