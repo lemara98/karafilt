@@ -125,10 +125,11 @@ produced for upload.
 | `offscreen` | MV3 service workers cannot run the Web Audio API. The offscreen document hosts the audio processing graph (WebAssembly worklet) that filters the captured tab audio. |
 | `activeTab` | Grants the temporary right to capture the tab the user invoked Karafilt on, preserving the user-gesture requirement of tabCapture without prompting a screen picker. |
 | `tabs` | Used to detect when the captured tab navigates to another page (capture is stopped) and to address the active tab when the user starts filtering from the side panel. |
-| `storage` | Stores user settings: filter mode, vocal/instrumental mix, lyrics on/off, and the account site URL. |
+| `storage` | Stores user settings: filter mode, vocal-removal amount, Sync/Focus toggles, and lyrics appearance (font, size, highlight color). |
 | `sidePanel` | The side panel is the main UI: synchronized lyrics, filter controls, and settings. |
 | `scripting` | Injects the lyrics content script into tabs that were already open when the extension was installed or re-enabled, so lyrics work without reloading those tabs. |
 | `contextMenus` | Adds a "Filter this tab" right-click item as an alternative way to start filtering with a clean user gesture. |
+| `alarms` | Runs a periodic (60-second) heartbeat only while filtering is active, so the duration of each filtering session is timed accurately for the user's own usage stats and is still saved if the MV3 service worker is suspended mid-song. No alarms run when filtering is off. |
 | Host permission `<all_urls>` | Karafilt works on any website that plays audio (YouTube, streaming services, web radios…). The content script reads the page's media title and playback position to find and synchronize lyrics for whatever the user is listening to; the user chooses when filtering starts. It also reads the user's karafilt.com sign-in session to confirm the account is signed in. |
 
 **Remote code:** No, I am not using remote code. All code, including the
@@ -147,9 +148,15 @@ karafilt.com) — no code is fetched or executed.
   confirm you are signed in and to show your account email in the side panel.
   It never handles your password — sign-in happens on karafilt.com — and it
   does not transmit your session anywhere except back to karafilt.com itself.
+- ✅ **User activity** — while you are signed in and actively filtering, Karafilt
+  records which song you filtered (its title and a normalized per-song key
+  derived from the tab URL), the filter mode, and how long the filter was active.
+  This is sent to karafilt.com to power your own usage stats (total time, songs,
+  per-mode breakdown) on your account page. Only songs you actively filter are
+  recorded — general browsing is not — and no audio is ever transmitted.
 - ❌ Personally identifiable information (beyond the account email above),
-  health, financial, personal communications, location, web history, user
-  activity — not collected.
+  health, financial, personal communications, location, web history — not
+  collected.
 
 **Certifications (tick all three):**
 - Not sold to third parties, outside of approved use cases
@@ -171,6 +178,7 @@ karafilt.com) — no code is fetched or executed.
 ## Versioning note
 
 The store rejects an update whose `manifest.json` `"version"` is not higher
-than the currently published one. This build is `0.2.0` (bumped from `0.1.0`
-to mark the "free + login, no AI backend" change). If a `0.2.0` or higher is
-ever already live, bump again before zipping.
+than the currently published one. This build is `0.4.0` (adds customizable
+lyrics, rating editing/history, usage stats, and a stronger Spectral Deep; new
+`alarms` permission). If `0.4.0` or higher is ever already live, bump again
+before zipping.
