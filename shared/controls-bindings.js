@@ -16,7 +16,9 @@
   const DEFAULTS = {
     mode: "stft",
     mix: 100,
-    websiteUrl: "https://karafilt.com",
+    // Account site is no longer user-editable; the service worker keeps its own
+    // "https://karafilt.com" default when reading storage, so it isn't needed
+    // here.
   };
 
   // Detect which fields a caller actually rendered. Some surfaces may omit
@@ -179,21 +181,11 @@
       });
     }
 
-    // Account site URL. The service worker reads this from storage to probe the
-    // signed-in session (/api/me) and to open the login page. Defaults to
-    // karafilt.com; only self-hosters of the site need to change it.
-    if (has(els, "websiteUrlInput")) {
-      els.websiteUrlInput.addEventListener("change", () => {
-        chrome.storage.local.set({ websiteUrl: els.websiteUrlInput.value.trim() });
-      });
-    }
-
     // ── Initial state from storage + active capture state ─────────────────
     chrome.storage.local.get(DEFAULTS, (settings) => {
       if (els.modeSelect) els.modeSelect.value = settings.mode;
       if (els.mixSlider) els.mixSlider.value = settings.mix;
       if (els.mixValue) els.mixValue.textContent = settings.mix + "%";
-      if (els.websiteUrlInput) els.websiteUrlInput.value = settings.websiteUrl;
       if (els.modeHint) els.modeHint.textContent = MODE_HINTS[settings.mode] || "";
 
       chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
@@ -222,10 +214,6 @@
       if (changes.mix && els.mixSlider && document.activeElement !== els.mixSlider) {
         els.mixSlider.value = changes.mix.newValue;
         if (els.mixValue) els.mixValue.textContent = changes.mix.newValue + "%";
-      }
-      if (changes.websiteUrl && els.websiteUrlInput && document.activeElement !== els.websiteUrlInput) {
-        els.websiteUrlInput.value = changes.websiteUrl.newValue;
-        refreshAuthGate();
       }
     });
 
