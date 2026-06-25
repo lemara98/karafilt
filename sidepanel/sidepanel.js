@@ -773,6 +773,86 @@ if (karaokeToggle) {
   });
 }
 
+// --- Lyrics appearance (font family, size, highlight color) ────────────────
+// User-tunable look of the lyrics. Applied as CSS variables on #lines and
+// persisted in chrome.storage.local. Side panel only — the popup shows no
+// lyrics. "Default" font clears the override so the CSS default stack wins.
+const FONT_STACKS = {
+  default: "",
+  serif: 'Georgia, "Times New Roman", serif',
+  rounded: '"Trebuchet MS", "Segoe UI", Verdana, sans-serif',
+  mono: '"SF Mono", "Fira Code", "Cascadia Code", monospace',
+};
+const APPEARANCE_DEFAULTS = {
+  lyricsFont: "default",
+  lyricsFontScale: 100, // percent of the base size
+  lyricsHighlight: "#c084fc",
+};
+
+const fontFamilySel = document.getElementById("sp-font-family");
+const fontSizeInput = document.getElementById("sp-font-size");
+const fontSizeValue = document.getElementById("sp-font-size-value");
+const highlightInput = document.getElementById("sp-highlight-color");
+const resetSettingsBtn = document.getElementById("sp-reset-settings");
+
+function applyLyricsFont(key) {
+  if (!linesEl) return;
+  const stack = FONT_STACKS[key] || "";
+  if (stack) linesEl.style.setProperty("--lyrics-font-family", stack);
+  else linesEl.style.removeProperty("--lyrics-font-family");
+}
+function applyLyricsScale(pct) {
+  const n = Number(pct) || 100;
+  if (linesEl) linesEl.style.setProperty("--lyrics-font-scale", String(n / 100));
+  if (fontSizeValue) fontSizeValue.textContent = n + "%";
+}
+function applyLyricsHighlight(color) {
+  if (!linesEl) return;
+  if (color) linesEl.style.setProperty("--lyrics-highlight", color);
+  else linesEl.style.removeProperty("--lyrics-highlight");
+}
+
+chrome.storage.local.get(APPEARANCE_DEFAULTS, (s) => {
+  if (fontFamilySel) fontFamilySel.value = s.lyricsFont;
+  if (fontSizeInput) fontSizeInput.value = s.lyricsFontScale;
+  if (highlightInput) highlightInput.value = s.lyricsHighlight;
+  applyLyricsFont(s.lyricsFont);
+  applyLyricsScale(s.lyricsFontScale);
+  applyLyricsHighlight(s.lyricsHighlight);
+});
+
+if (fontFamilySel) {
+  fontFamilySel.addEventListener("change", () => {
+    chrome.storage.local.set({ lyricsFont: fontFamilySel.value });
+    applyLyricsFont(fontFamilySel.value);
+  });
+}
+if (fontSizeInput) {
+  fontSizeInput.addEventListener("input", () => {
+    chrome.storage.local.set({
+      lyricsFontScale: parseInt(fontSizeInput.value, 10),
+    });
+    applyLyricsScale(fontSizeInput.value);
+  });
+}
+if (highlightInput) {
+  highlightInput.addEventListener("input", () => {
+    chrome.storage.local.set({ lyricsHighlight: highlightInput.value });
+    applyLyricsHighlight(highlightInput.value);
+  });
+}
+if (resetSettingsBtn) {
+  resetSettingsBtn.addEventListener("click", () => {
+    chrome.storage.local.set(APPEARANCE_DEFAULTS);
+    if (fontFamilySel) fontFamilySel.value = APPEARANCE_DEFAULTS.lyricsFont;
+    if (fontSizeInput) fontSizeInput.value = APPEARANCE_DEFAULTS.lyricsFontScale;
+    if (highlightInput) highlightInput.value = APPEARANCE_DEFAULTS.lyricsHighlight;
+    applyLyricsFont(APPEARANCE_DEFAULTS.lyricsFont);
+    applyLyricsScale(APPEARANCE_DEFAULTS.lyricsFontScale);
+    applyLyricsHighlight(APPEARANCE_DEFAULTS.lyricsHighlight);
+  });
+}
+
 // --- Filter controls (shared with the popup) ──────────────────────────────
 const $sp = (id) => document.getElementById(id);
 const spToggleBtn = $sp("sp-toggle");
@@ -794,7 +874,6 @@ if (spToggleBtn && window.bindKaraokeControls) {
     mixValue: $sp("sp-mix-value"),
     settingsToggle: $sp("sp-settings-toggle"),
     settingsPanel: $sp("sp-settings-panel"),
-    websiteUrlInput: $sp("sp-website-url"),
     countdownOverlay: $sp("sp-countdown-overlay"),
     countdownNumber: $sp("sp-countdown-number"),
     countdownCancelBtn: $sp("sp-countdown-cancel"),

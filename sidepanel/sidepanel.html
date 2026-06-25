@@ -109,10 +109,8 @@
           <svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
         </div>
         <span class="hint" id="sp-mode-hint"></span>
-      </div>
 
-      <div class="section">
-        <div class="section-header">
+        <div class="section-header settings-gap">
           <label for="sp-mix">Vocal Removal</label>
           <span class="mix-val" id="sp-mix-value">100%</span>
         </div>
@@ -158,12 +156,37 @@
         </button>
       </div>
 
+      <!-- Lyrics appearance: font family, size and the active-word highlight
+           colour. sidepanel.js applies these as CSS variables on #lines and
+           persists them in chrome.storage.local. -->
       <div class="section settings-panel" id="sp-settings-panel" style="display:none">
         <div class="section-header">
-          <label for="sp-website-url">Account site</label>
+          <label for="sp-font-family">Lyrics font</label>
         </div>
-        <input type="text" id="sp-website-url" class="text-input" placeholder="https://karafilt.com">
-        <span class="hint">Where you sign in. Leave as the default unless you self-host the site.</span>
+        <div class="select-wrap">
+          <select id="sp-font-family">
+            <option value="default">Default</option>
+            <option value="serif">Serif</option>
+            <option value="rounded">Rounded</option>
+            <option value="mono">Monospace</option>
+          </select>
+          <svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+        </div>
+
+        <div class="section-header settings-gap">
+          <label for="sp-font-size">Font size</label>
+          <span class="mix-val" id="sp-font-size-value">100%</span>
+        </div>
+        <div class="slider-track">
+          <input type="range" id="sp-font-size" min="80" max="200" step="10" value="100">
+        </div>
+
+        <div class="section-header settings-gap">
+          <label for="sp-highlight-color">Highlight color</label>
+          <input type="color" id="sp-highlight-color" class="color-input" value="#c084fc">
+        </div>
+
+        <button id="sp-reset-settings" class="reset-btn settings-gap">Reset to defaults</button>
       </div>
     </div>
   </div>
