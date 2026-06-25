@@ -4,7 +4,9 @@ class VocalRemoveProcessor extends AudioWorkletProcessor {
 
     this.ready = false;
     this.mix = 1.0;
-    this.mode = "stft"; // "basic" or "stft"
+    // Seeded from processorOptions so init applies the right STFT depth even
+    // before the first SET_MODE message arrives. "basic" | "stft" | "stft_deep".
+    this.mode = (options.processorOptions && options.processorOptions.mode) || "stft";
 
     this.port.onmessage = (event) => {
       const d = event.data;
@@ -20,7 +22,7 @@ class VocalRemoveProcessor extends AudioWorkletProcessor {
         // "Spectral Deep" relaxes the centerness mask to also catch center
         // backing vocals; plain "stft" keeps strict center cancellation.
         if (this.ready && this.exports.stft_set_depth) {
-          this.exports.stft_set_depth(d.value === "stft_deep" ? 0.85 : 0.0);
+          this.exports.stft_set_depth(d.value === "stft_deep" ? 1.0 : 0.0);
         }
       }
     };
@@ -74,7 +76,7 @@ class VocalRemoveProcessor extends AudioWorkletProcessor {
     this.exports.stft_init(this.sampleRateValue);
     this.exports.stft_set_attenuation(this.mix);
     if (this.exports.stft_set_depth) {
-      this.exports.stft_set_depth(this.mode === "stft_deep" ? 0.85 : 0.0);
+      this.exports.stft_set_depth(this.mode === "stft_deep" ? 1.0 : 0.0);
     }
     this.stftInputLPtr = this.exports.stft_get_input_l();
     this.stftInputRPtr = this.exports.stft_get_input_r();

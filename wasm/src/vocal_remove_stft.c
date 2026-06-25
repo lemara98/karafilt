@@ -57,8 +57,9 @@ static float full_hi_hz = 9000.0f;
 static float ramp_hi_hz = 12000.0f;  /* catches sibilance/air */
 static float centerness_exponent = 1.5f;  /* >1 sharpens the center mask */
 /* "Spectral Deep" depth: 0 = strict center cancellation (lead vocal only),
- * up to ~0.85 — relaxes the centerness mask and widens the band to also catch
- * center/near-center backing vocals + doubled leads (thinner instrumental). */
+ * 1 = Deep — relaxes the centerness mask, widens the band, and deepens the
+ * center null to also catch center/near-center backing vocals + doubled leads
+ * (thinner instrumental). The UI sends 0.0 for Spectral and 1.0 for Deep. */
 static float depth = 0.0f;
 
 /* legacy fields kept so stft_set_vocal_range stays export-safe (now inert) */
@@ -92,14 +93,30 @@ static inline float taper_ramp(float x) {
 
 /* Per-bin frequency weight from the soft band edges (0 = untouched, 1 = full). */
 static float band_weight(float freq_hz) {
-    /* Deep mode lowers the full-attenuation low edge to catch more low-mid vocal
-     * (160 -> ~120 Hz at depth=1) while ramp_lo_hz still protects the deep bass. */
-    float flo = full_lo_hz - depth * 40.0f;
-    if (freq_hz <= ramp_lo_hz || freq_hz >= ramp_hi_hz) return 0.0f;
+    /* Deep mode widens the vocal band on BOTH ends: lower low edge to catch more
+     * low-mid vocal (160 -> 100 Hz at depth=1, still clear of the 90 Hz
+     * bass-protection ramp) and higher upper edges to catch more harmonics/air
+     * (full 9k -> 10.5k, ramp 12k -> 13.5k). At depth=0 these equal the originals. */
+    float flo = full_lo_hz - depth * 60.0f;
+    float fhi = full_hi_hz + depth * 1500.0f;
+    float rhi = ramp_hi_hz + depth * 1500.0f;
+    if (freq_hz <= ramp_lo_hz || freq_hz >= rhi) return 0.0f;
     if (freq_hz < flo)
         return taper_ramp((freq_hz - ramp_lo_hz) / (flo - ramp_lo_hz));
-    if (freq_hz > full_hi_hz)
-        return taper_ramp((ramp_hi_hz - freq_hz) / (ramp_hi_hz - full_hi_hz));
+    if (freq_hz > fhi)
+        return taper_ramp((rhi - freq_hz) / (rhi - fhi));
+    return 1.0f;
+}
+
+/* Deep-mode side-channel (panned) removal weight. Center cancellation can't
+ * touch hard-panned backing vocals/harmonies, so Deep also thins the side
+ * signal — but only in the vocal formant band (~250-5000 Hz) where backing
+ * vocals live, tapering to 0 below 180 Hz (protect bass/kick groove) and above
+ * 8 kHz (protect cymbals/air), so the instrumental keeps its body. */
+static float vocal_core_weight(float freq_hz) {
+    if (freq_hz <= 180.0f || freq_hz >= 8000.0f) return 0.0f;
+    if (freq_hz < 300.0f)  return taper_ramp((freq_hz - 180.0f) / 120.0f);
+    if (freq_hz > 5000.0f) return taper_ramp((8000.0f - freq_hz) / 3000.0f);
     return 1.0f;
 }
 
@@ -122,7 +139,8 @@ static void process_one_frame(void) {
     const float EPS = 1e-9f;
 
     for (int k = 1; k < NUM_BINS; k++) {  /* k=0 (DC) skipped -> bass protection */
-        float fw = band_weight((float)k * bin_hz);
+        float freq = (float)k * bin_hz;
+        float fw = band_weight(freq);
         if (fw <= 0.0f) continue;          /* outside soft band: bin untouched */
 
         float lr = spec_l[k].r, li = spec_l[k].i;
@@ -140,21 +158,39 @@ static void process_one_frame(void) {
         if (coh < 0.0f) coh = 0.0f;
         if (coh > 1.0f) coh = 1.0f;
 
-        /* Deep mode lowers the exponent so partially-center bins (backing
-         * vocals, doubled leads) are attenuated too — not just dead-center leads. */
-        float cexp = centerness_exponent - depth * 0.9f;   /* 1.5 -> ~0.6 at depth=1 */
+        /* Deep mode casts a WIDER net: a much lower exponent plus a lift on the
+         * centerness mask pull partially-center bins (backing vocals, doubled
+         * leads) toward full attenuation — not just dead-center leads. */
+        float cexp = centerness_exponent - depth * 1.2f;  /* 1.5 -> 0.3 at depth=1 */
+        if (cexp < 0.3f) cexp = 0.3f;
         float centerness = powf(bal * coh, cexp);
+        centerness += depth * 0.2f * (1.0f - centerness);
 
-        float eff_atten = attenuation * fw * centerness;
-        if (eff_atten <= 0.0f) continue;
-        float keep = 1.0f - eff_atten;
+        /* Deep mode also nulls the center DEEPER: raise the effective removal
+         * ceiling toward 1 (at the default mix=0.85 -> ~0.978). depth=0 leaves
+         * the user's mix untouched. */
+        float atten_eff = attenuation + depth * (1.0f - attenuation) * 0.85f;
+
+        float eff_atten = atten_eff * fw * centerness;
+        if (eff_atten > 1.0f) eff_atten = 1.0f;
+        float keep_mid = 1.0f - eff_atten;
+
+        /* Deep mode ALSO strips the SIDE (panned) signal hard in the vocal
+         * formant band, so hard-panned backing vocals and stereo harmonies —
+         * which center cancellation alone can't touch — are largely removed
+         * (~70% at depth=1). Focused via vocal_core_weight so bass and brilliance
+         * keep their stereo image; midrange panned instruments are thinned, which
+         * is the "Strong / thinner mix" trade-off. depth=0 leaves sides intact. */
+        float keep_side = 1.0f - depth * 0.70f * vocal_core_weight(freq);
 
         float mid_r = (lr + rr) * 0.5f;
         float mid_i = (li + ri) * 0.5f;
-        spec_l[k].r = (lr - mid_r) + mid_r * keep;
-        spec_l[k].i = (li - mid_i) + mid_i * keep;
-        spec_r[k].r = (rr - mid_r) + mid_r * keep;
-        spec_r[k].i = (ri - mid_i) + mid_i * keep;
+        float side_lr = lr - mid_r, side_li = li - mid_i;
+        float side_rr = rr - mid_r, side_ri = ri - mid_i;
+        spec_l[k].r = side_lr * keep_side + mid_r * keep_mid;
+        spec_l[k].i = side_li * keep_side + mid_i * keep_mid;
+        spec_r[k].r = side_rr * keep_side + mid_r * keep_mid;
+        spec_r[k].i = side_ri * keep_side + mid_i * keep_mid;
     }
 
     /* Inverse FFT */
@@ -259,8 +295,8 @@ void stft_set_attenuation(float a) {
     attenuation = a;
 }
 
-/* 0 = Spectral (strict center). ~0.85 = Spectral Deep (catches center backing
- * vocals). Relaxes the centerness mask + widens the vocal band. */
+/* 0 = Spectral (strict center). 1 = Spectral Deep (catches center backing
+ * vocals, deeper null). Relaxes the centerness mask + widens the vocal band. */
 void stft_set_depth(float d) {
     if (d < 0.0f) d = 0.0f;
     if (d > 1.0f) d = 1.0f;

@@ -68,6 +68,10 @@ async function startCaptureFromMediaStream(stream, initialMode) {
       processorOptions: {
         wasmModule: wasmModule,
         sampleRate: audioContext.sampleRate,
+        // Pass the mode in so the worklet applies the correct STFT depth during
+        // its async WASM init — the SET_MODE postMessage below can otherwise
+        // race ahead of (or behind) init and leave Deep at depth 0.
+        mode: initialMode,
       },
     }
   );
