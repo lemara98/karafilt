@@ -5,6 +5,36 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-06-25
+
+### Added
+- **Customizable lyrics.** A new Settings panel lets you pick the lyrics **font**
+  (Default, Serif, Rounded, Monospace), scale the **font size** (80–200%), and
+  choose the **highlight color** for the active line and currently-sung word —
+  plus a **Reset to defaults** button. Your choices persist across sessions.
+- **Edit your rating, with history.** When you revisit a song you've rated, the
+  side panel pre-fills your previous stars and comment so you can update them.
+  Re-rating now keeps the full edit history server-side (only your latest rating
+  counts toward the community average).
+- **Your usage stats.** Karafilt now records which songs you filter and for how
+  long (while signed in) to power a new **"Your usage"** section on your account
+  page: total time filtered, songs listened to, most-filtered songs, and a
+  per-mode breakdown. A short note on the account page explains what's recorded.
+
+### Changed
+- **Much stronger Spectral Deep.** Deep mode now nulls the center vocal far more
+  completely, widens the vocal band, and — unlike plain Spectral — also thins
+  panned backing vocals and stereo harmonies in the vocal range, for an audibly
+  more vocal-free (thinner) mix. Plain Spectral is unchanged.
+- **Tidier Settings.** The "Account site" field was removed from the side panel
+  (it stays on the default karafilt.com), and **Vocal Removal** now sits with
+  **Mode** in one section.
+
+### Notes
+- Adds the `alarms` permission (used to keep usage timing accurate across the
+  service worker's lifecycle). Usage stats require the karafilt.com backend and
+  use your existing signed-in session — no audio ever leaves your browser.
+
 ## [0.3.0] — 2026-06-22
 
 ### Added
@@ -60,6 +90,7 @@ Initial public release.
 - Smoother, lower-latency audio pipeline (buffered, gapless playback) and
   refined LRCLib search (throttling, deduplication, progressive results).
 
+[0.4.0]: https://github.com/lemara98/karafilt/releases/tag/v0.4.0
 [0.3.0]: https://github.com/lemara98/karafilt/releases/tag/v0.3.0
 [0.2.1]: https://github.com/lemara98/karafilt/releases/tag/v0.2.1
 [0.2.0]: https://github.com/lemara98/karafilt/releases/tag/v0.2.0
