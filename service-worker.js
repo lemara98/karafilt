@@ -806,6 +806,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       })();
       return true; // async response
+
+    case "GET_MY_FILTER_RATING":
+      // The signed-in user's current rating for one video key, so the side panel
+      // can pre-fill the widget ("you've already rated this"). Cookie-carrying
+      // fetch like SUBMIT_FILTER_RATING; routed through the SW to bypass CORS.
+      (async () => {
+        const videoKey =
+          typeof message.videoKey === "string" ? message.videoKey : null;
+        if (!videoKey) {
+          sendResponse({ ok: false, rating: null });
+          return;
+        }
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false, rating: null });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/filter-ratings/mine`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({ videoKey }),
+            },
+            8000,
+          );
+          if (res.ok) {
+            const data = await res.json();
+            sendResponse({
+              ok: true,
+              rating: data.rating ?? null,
+              comment: data.comment ?? null,
+            });
+          } else {
+            sendResponse({ ok: false, status: res.status, rating: null });
+          }
+        } catch {
+          sendResponse({ ok: false, error: "network", rating: null });
+        }
+      })();
+      return true; // async response
   }
 });
 

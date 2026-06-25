@@ -949,8 +949,32 @@ function loadCommunityRating(key) {
   );
 }
 
-// Show the widget when a song is playing; reset it when the song changes so
-// each song is rated fresh.
+// Fetch the signed-in user's existing (active) rating for a video key and
+// pre-fill the widget, so they can see and update it rather than rating blind.
+// Silent when not signed in or not yet rated (the widget stays in its reset
+// state). Guards against a stale response after the song already changed.
+function loadMyRating(key) {
+  chrome.runtime.sendMessage(
+    { type: "GET_MY_FILTER_RATING", videoKey: key },
+    (res) => {
+      if (chrome.runtime.lastError || !res || !res.ok) return;
+      if (key !== ratingWidgetKey) return;
+      if (!res.rating) return; // not rated yet — leave the reset widget as-is
+      selectedRating = Number(res.rating) || 0;
+      if (ratingCommentEl) ratingCommentEl.value = res.comment || "";
+      paintStars();
+      if (ratingStatusEl) {
+        ratingStatusEl.textContent = `You rated this ${starString(
+          selectedRating,
+        )} — submit to update.`;
+        ratingStatusEl.className = "hint";
+      }
+    },
+  );
+}
+
+// Show the widget when a song is playing; reset it when the song changes, then
+// pre-fill the user's prior rating (if any) so they edit rather than re-rate.
 function updateRatingWidget() {
   if (!ratingSectionEl) return;
   const key = hasMedia ? deriveVideoKey(lastKnownUrl) : null;
@@ -964,6 +988,7 @@ function updateRatingWidget() {
     ratingWidgetKey = key;
     resetRatingWidget();
     loadCommunityRating(key);
+    loadMyRating(key);
   }
 }
 
@@ -1007,9 +1032,10 @@ if (ratingSubmitEl) {
           ratingSubmitEl.disabled = false;
           return;
         }
-        ratingStatusEl.textContent = "Thanks for the feedback!";
+        ratingStatusEl.textContent = "Rating saved — thanks!";
         ratingStatusEl.className = "hint ok";
-        // Reflect the new rating in the community average.
+        // Reflect the new rating in the community average. selectedRating is
+        // kept so the stars stay filled, ready for a further edit.
         if (payload.videoKey) loadCommunityRating(payload.videoKey);
       },
     );
