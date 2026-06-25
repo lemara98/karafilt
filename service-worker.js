@@ -1,6 +1,9 @@
 // Shared song-matching core (title cleaning, candidate scoring, LRCLib request
 // building). importScripts runs synchronously and populates self.KarafiltSongMatch.
 importScripts("shared/song-match.js");
+// deriveVideoKey (globalThis.deriveVideoKey) — same per-song key the side panel
+// uses, so usage rows and rating rows agree on what a "song" is.
+importScripts("shared/video-key.js");
 const SM = self.KarafiltSongMatch;
 const { normalizeForMatch, levenshtein, fuzzyTrackMatch } = SM;
 
@@ -12,6 +15,137 @@ let offscreenReady = false;
 let currentMode = "stft";
 let capturedTabId = null;
 let capturedTabUrl = null;
+
+// ── Filter usage tracking ───────────────────────────────────────────────────
+// A "listen segment" = one contiguous stretch with the filter active on a single
+// song in a single mode. The SW owns the timing because capture keeps running
+// when the side panel is closed; the panel feeds song titles/artists via
+// SET_CURRENT_SONG. Each segment is posted to the website (record_filter_usage)
+// when it ends — on stop, navigate-away, tab close, song change, or mode change.
+// currentUsage is mirrored to chrome.storage.local (`pendingUsage`) so an
+// evicted/crashed SW can still flush the segment on its next start; a 60s alarm
+// heartbeat caps how much of an abrupt end we can lose to ~1 minute.
+const USAGE_MIN_SECONDS = 3; // ignore accidental blips
+const USAGE_HEARTBEAT_ALARM = "kf-usage-heartbeat";
+let currentUsage = null; // open segment, or null when not filtering
+let lastKnownSong = null; // last song the panel reported (seeds segment metadata)
+
+function persistUsage() {
+  if (currentUsage) chrome.storage.local.set({ pendingUsage: currentUsage });
+  else chrome.storage.local.remove("pendingUsage");
+}
+
+// Begin a segment for the current tab/mode, seeding song metadata from the last
+// panel report when it matches the same video key (so even the first segment has
+// a title; panel-closed sessions get video_key only).
+function openUsage(url, mode, meta) {
+  // Never overwrite an open segment without recording it first.
+  if (currentUsage) flushUsage(Date.now());
+  const key = deriveVideoKey(url || capturedTabUrl);
+  if (!meta && lastKnownSong && lastKnownSong.videoKey === key) meta = lastKnownSong;
+  const t = Date.now();
+  currentUsage = {
+    videoKey: key,
+    videoUrl: url || capturedTabUrl || null,
+    songTitle: (meta && meta.songTitle) || null,
+    trackName: (meta && meta.trackName) || null,
+    artistName: (meta && meta.artistName) || null,
+    mode: mode || currentMode || null,
+    startedAtMs: t,
+    lastBeatMs: t,
+  };
+  persistUsage();
+  chrome.alarms.create(USAGE_HEARTBEAT_ALARM, { periodInMinutes: 1 });
+}
+
+// End the open segment (if any) and post it. Idempotent: safe to call from every
+// stop path even when nothing is open.
+function flushUsage(endMs) {
+  const seg = currentUsage;
+  currentUsage = null;
+  persistUsage();
+  chrome.alarms.clear(USAGE_HEARTBEAT_ALARM);
+  if (!seg || !seg.videoKey) return;
+  const end = endMs || seg.lastBeatMs || Date.now();
+  const seconds = Math.round((end - seg.startedAtMs) / 1000);
+  if (seconds < USAGE_MIN_SECONDS) return;
+  sendFilterUsage({
+    videoKey: seg.videoKey,
+    videoUrl: seg.videoUrl,
+    songTitle: seg.songTitle,
+    trackName: seg.trackName,
+    artistName: seg.artistName,
+    filterMode: seg.mode,
+    seconds,
+    startedAt: seg.startedAtMs,
+    endedAt: end,
+    extensionVersion: chrome.runtime.getManifest().version,
+  });
+}
+
+// Cookie-carrying POST to the website — same auth path as SUBMIT_FILTER_RATING.
+async function sendFilterUsage(payload) {
+  const { websiteUrl } = await chrome.storage.local.get({
+    websiteUrl: "https://karafilt.com",
+  });
+  const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+  if (!base) return;
+  try {
+    await fetchWithTimeout(
+      `${base}/api/filter-usage`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload),
+      },
+      8000,
+    );
+  } catch {
+    // Best-effort telemetry — a dropped segment isn't worth retrying.
+  }
+}
+
+// On SW startup, flush any segment a previous (evicted) worker left open. Capture
+// state doesn't survive a SW restart, so the segment ended around its last
+// heartbeat.
+async function recoverPendingUsage() {
+  const { pendingUsage } = await chrome.storage.local.get({ pendingUsage: null });
+  if (!pendingUsage || !pendingUsage.videoKey) return;
+  await chrome.storage.local.remove("pendingUsage");
+  const end = pendingUsage.lastBeatMs || pendingUsage.startedAtMs;
+  const seconds = Math.round((end - pendingUsage.startedAtMs) / 1000);
+  if (seconds < USAGE_MIN_SECONDS) return;
+  sendFilterUsage({
+    videoKey: pendingUsage.videoKey,
+    videoUrl: pendingUsage.videoUrl,
+    songTitle: pendingUsage.songTitle,
+    trackName: pendingUsage.trackName,
+    artistName: pendingUsage.artistName,
+    filterMode: pendingUsage.mode,
+    seconds,
+    startedAt: pendingUsage.startedAtMs,
+    endedAt: end,
+    extensionVersion: chrome.runtime.getManifest().version,
+  });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== USAGE_HEARTBEAT_ALARM) return;
+  if (!currentUsage) {
+    chrome.alarms.clear(USAGE_HEARTBEAT_ALARM);
+    return;
+  }
+  // If capture is no longer active, close the segment at the last good beat.
+  if (capturedTabId === null) {
+    flushUsage(currentUsage.lastBeatMs);
+    return;
+  }
+  currentUsage.lastBeatMs = Date.now();
+  persistUsage();
+});
+
+recoverPendingUsage();
 
 // The side panel is PINNED to one tab at a time: disabled by default
 // everywhere, enabled only for the tab the user invoked Karafilt on (icon
@@ -68,6 +202,7 @@ chrome.action.onClicked.addListener((tab) => {
   bindPanelToTab(tab.id);
   chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   if (capturedTabId !== null && capturedTabId !== tab.id) {
+    flushUsage(Date.now());
     capturedTabId = null;
     capturedTabUrl = null;
     chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
@@ -86,6 +221,7 @@ function toggleCaptureForTab(tab) {
     return;
   }
   if (capturedTabId === tab.id) {
+    flushUsage(Date.now());
     capturedTabId = null;
     capturedTabUrl = null;
     chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
@@ -626,6 +762,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "STOP_CAPTURE":
       dbg("[SW] STOP_CAPTURE received, forwarding to offscreen");
+      flushUsage(Date.now());
       capturedTabId = null;
       capturedTabUrl = null;
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -638,8 +775,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "SET_MODE":
       currentMode = message.value;
+      // Attribute time per mode: close the current segment and open a fresh one
+      // for the same song under the new mode.
+      if (currentUsage) {
+        const meta = {
+          videoKey: currentUsage.videoKey,
+          songTitle: currentUsage.songTitle,
+          trackName: currentUsage.trackName,
+          artistName: currentUsage.artistName,
+        };
+        flushUsage(Date.now());
+        openUsage(capturedTabUrl, currentMode, meta);
+      }
       chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
       break;
+
+    case "SET_CURRENT_SONG": {
+      // The side panel reports the active song's metadata (it has the title/
+      // artist the SW can't see). Cache it to seed future segments, and enrich or
+      // re-segment the open one.
+      const song = message.song || {};
+      if (song.videoKey) lastKnownSong = song;
+      if (currentUsage) {
+        if (song.videoKey && song.videoKey !== currentUsage.videoKey) {
+          flushUsage(Date.now());
+          openUsage(song.videoUrl || capturedTabUrl, currentMode, song);
+        } else {
+          if (song.songTitle) currentUsage.songTitle = song.songTitle;
+          if (song.trackName) currentUsage.trackName = song.trackName;
+          if (song.artistName) currentUsage.artistName = song.artistName;
+          if (song.videoUrl) currentUsage.videoUrl = song.videoUrl;
+          persistUsage();
+        }
+      }
+      break;
+    }
 
     case "FETCH_LYRICS": {
       const tabId = sender.tab ? sender.tab.id : null;
@@ -867,16 +1037,26 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       const newUrl = new URL(changeInfo.url);
       if (oldUrl.origin + oldUrl.pathname !== newUrl.origin + newUrl.pathname) {
         dbg("Tab navigated away, stopping capture:", changeInfo.url);
+        flushUsage(Date.now());
         capturedTabId = null;
         capturedTabUrl = null;
         chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
         chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
       } else {
-        // Update stored URL but don't stop capture
+        // Same page, query/hash change. On YouTube the next video keeps /watch
+        // but swaps ?v= — that's a new song, so re-segment usage.
         capturedTabUrl = changeInfo.url;
+        if (currentUsage) {
+          const newKey = deriveVideoKey(changeInfo.url);
+          if (newKey && newKey !== currentUsage.videoKey) {
+            flushUsage(Date.now());
+            openUsage(changeInfo.url, currentMode);
+          }
+        }
       }
     } catch (e) {
       // If URL parsing fails, stop capture to be safe
+      flushUsage(Date.now());
       capturedTabId = null;
       capturedTabUrl = null;
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -934,6 +1114,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     }
   });
   if (tabId === capturedTabId) {
+    flushUsage(Date.now());
     capturedTabId = null;
     capturedTabUrl = null;
     chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -950,6 +1131,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function handleStartCaptureViaDisplayMedia(tabId) {
   try {
     if (capturedTabId !== null) {
+      flushUsage(Date.now());
       capturedTabId = null;
       capturedTabUrl = null;
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -960,6 +1142,7 @@ async function handleStartCaptureViaDisplayMedia(tabId) {
 
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
+    openUsage(tab.url, currentMode);
     dbg("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode);
     chrome.runtime.sendMessage({
       type: "START_VIA_DISPLAY_MEDIA",
@@ -976,6 +1159,7 @@ async function handleStartCapture(tabId, providedStreamId) {
   try {
     // Stop any existing capture first
     if (capturedTabId !== null) {
+      flushUsage(Date.now());
       capturedTabId = null;
       capturedTabUrl = null;
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
@@ -1002,6 +1186,7 @@ async function handleStartCapture(tabId, providedStreamId) {
     // Send stream ID along with current mode so it's applied after capture starts
     capturedTabId = tabId;
     capturedTabUrl = tab.url;
+    openUsage(tab.url, currentMode);
 
     dbg("[SW] sending STREAM_READY, mode:", currentMode);
     chrome.runtime.sendMessage({

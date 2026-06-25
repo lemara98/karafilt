@@ -956,26 +956,8 @@ const ratingStarBtns = ratingStarsEl
 let selectedRating = 0;
 let ratingWidgetKey = null; // video key the widget is currently showing
 
-// Normalize a tab URL to a stable per-song key. YouTube collapses to the video
-// id (survives playlist/timestamp params); everything else uses host + path.
-function deriveVideoKey(url) {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, "");
-    if (/(^|\.)youtube\.com$/.test(host)) {
-      const v = u.searchParams.get("v");
-      if (v) return "yt:" + v;
-    }
-    if (host === "youtu.be") {
-      const id = u.pathname.slice(1).split("/")[0];
-      if (id) return "yt:" + id;
-    }
-    return host + u.pathname.replace(/\/+$/, "");
-  } catch {
-    return null;
-  }
-}
+// deriveVideoKey is provided by shared/video-key.js (loaded before this script).
+const deriveVideoKey = globalThis.deriveVideoKey;
 
 function paintStars() {
   for (const btn of ratingStarBtns) {
@@ -1054,6 +1036,27 @@ function loadMyRating(key) {
 
 // Show the widget when a song is playing; reset it when the song changes, then
 // pre-fill the user's prior rating (if any) so they edit rather than re-rate.
+// Tell the service worker which song is playing. The SW times filter usage but
+// only sees the tab URL — this gives it the title/artist to label segments with.
+// Cheap and idempotent: the SW keys by videoKey and enriches the open segment.
+function reportCurrentSong() {
+  const videoKey = deriveVideoKey(lastKnownUrl);
+  if (!videoKey) return;
+  const match = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
+  chrome.runtime
+    .sendMessage({
+      type: "SET_CURRENT_SONG",
+      song: {
+        videoKey,
+        videoUrl: lastKnownUrl || null,
+        songTitle: lastCleanedTitle || null,
+        trackName: (match && match.trackName) || null,
+        artistName: (match && match.artistName) || null,
+      },
+    })
+    .catch(() => {});
+}
+
 function updateRatingWidget() {
   if (!ratingSectionEl) return;
   const key = hasMedia ? deriveVideoKey(lastKnownUrl) : null;
@@ -1069,6 +1072,7 @@ function updateRatingWidget() {
     loadCommunityRating(key);
     loadMyRating(key);
   }
+  reportCurrentSong();
 }
 
 for (const btn of ratingStarBtns) {
