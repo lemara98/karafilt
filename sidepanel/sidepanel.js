@@ -949,6 +949,7 @@ const ratingStarsEl = document.getElementById("sp-rating-stars");
 const ratingCommentEl = document.getElementById("sp-rating-comment");
 const ratingSubmitEl = document.getElementById("sp-rating-submit");
 const ratingStatusEl = document.getElementById("sp-rating-status");
+const ratingExpandEl = document.getElementById("sp-rating-expand");
 const ratingStarBtns = ratingStarsEl
   ? Array.from(ratingStarsEl.querySelectorAll(".star"))
   : [];
@@ -965,6 +966,9 @@ function paintStars() {
     btn.classList.toggle("selected", v <= selectedRating);
   }
   if (ratingSubmitEl) ratingSubmitEl.disabled = selectedRating < 1;
+  // Keep it compact until a star is chosen: reveal the comment + submit only
+  // once there's a rating (a fresh click, or a pre-filled existing rating).
+  if (ratingExpandEl) ratingExpandEl.style.display = selectedRating > 0 ? "" : "none";
 }
 
 function resetRatingWidget() {
@@ -1124,6 +1128,86 @@ if (ratingSubmitEl) {
     );
   });
 }
+
+// --- Party mode (header pill) ──────────────────────────────────────────────
+// A compact button next to the logo. Click → the service worker creates a room
+// (POST /api/party/create) and opens the host player tab, which carries the QR,
+// queue and controls — so there's no QR in the panel. While a party is live the
+// pill is highlighted and shows the queue count; clicking again re-opens the
+// player tab.
+(function initPartyMode() {
+  const btn = document.getElementById("sp-party-btn");
+  if (!btn) return;
+  const countEl = document.getElementById("sp-party-count");
+
+  let current = null; // { code, joinUrl, hostTabId }
+  let pollTimer = null;
+
+  const playerUrl = (u) => u + (u.includes("?") ? "&" : "?") + "host=1";
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+  function refreshCount() {
+    if (!current) return;
+    chrome.runtime.sendMessage({ type: "GET_PARTY_COUNT", code: current.code }, (res) => {
+      if (chrome.runtime.lastError || !res || !res.ok) return;
+      if (res.found === false || res.status === "closed") {
+        chrome.runtime.sendMessage({ type: "END_PARTY" }, () => setInactive());
+        return;
+      }
+      if (countEl) {
+        const n = res.count ?? 0;
+        countEl.textContent = String(n);
+        countEl.hidden = n <= 0;
+      }
+    });
+  }
+  function setActive(room) {
+    current = room;
+    btn.classList.add("active");
+    btn.title = "Party live — open the player tab";
+    refreshCount();
+    stopPolling();
+    pollTimer = setInterval(refreshCount, 15000);
+  }
+  function setInactive() {
+    current = null;
+    stopPolling();
+    btn.classList.remove("active");
+    btn.title = "Party mode — host a karaoke party";
+    if (countEl) { countEl.hidden = true; countEl.textContent = "0"; }
+  }
+  function openHost() {
+    if (!current) return;
+    if (current.hostTabId != null) {
+      chrome.tabs.update(current.hostTabId, { active: true }).catch(() => {
+        chrome.tabs.create({ url: playerUrl(current.joinUrl) });
+      });
+    } else {
+      chrome.tabs.create({ url: playerUrl(current.joinUrl) });
+    }
+  }
+
+  btn.addEventListener("click", () => {
+    if (current) { openHost(); return; } // already live → re-open the player tab
+    btn.disabled = true;
+    chrome.runtime.sendMessage({ type: "CREATE_PARTY" }, (res) => {
+      btn.disabled = false;
+      if (chrome.runtime.lastError || !res || !res.ok) {
+        btn.title = res && res.status === 401 ? "Please sign in first" : "Couldn't start a party";
+        return;
+      }
+      setActive({ code: res.code, joinUrl: res.joinUrl, hostTabId: res.hostTabId });
+    });
+  });
+
+  // Restore an in-progress party when the panel (re)opens.
+  chrome.runtime.sendMessage({ type: "GET_PARTY" }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (res && res.partyRoom && res.partyRoom.code) setActive(res.partyRoom);
+  });
+})();
 
 // --- Init ---
 bindToPinnedTab();

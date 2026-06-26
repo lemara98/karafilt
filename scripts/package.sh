@@ -48,6 +48,7 @@ mkdir -p "$STAGE/content"
 cp content/lyrics-overlay.js "$STAGE/content/"
 cp content/yt-rating-badges.js "$STAGE/content/"
 cp content/yt-rating-badges.css "$STAGE/content/"
+cp content/party-bridge.js "$STAGE/content/"
 mkdir -p "$STAGE/wasm/build"
 cp wasm/build/vocal_remove.wasm "$STAGE/wasm/build/"
 
@@ -68,6 +69,13 @@ for token in csp.split():
         token = prod_ws_host
     parts.append(token)
 manifest["content_security_policy"]["extension_pages"] = " ".join(parts)
+
+# Strip dev-only localhost match patterns from content scripts (e.g. the party
+# bridge), mirroring the CSP stripping above — no localhost reference may ship.
+for cs in manifest.get("content_scripts", []):
+    if "matches" in cs:
+        cs["matches"] = [m for m in cs["matches"]
+                         if "localhost" not in m and "127.0.0.1" not in m]
 
 json.dump(manifest, open(f"{stage}/manifest.json", "w"), indent=2)
 PY

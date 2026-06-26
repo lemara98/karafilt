@@ -46,6 +46,10 @@ When a track has multiple matches (covers, live versions, remixes), pick the rig
   <img src="store-assets/screenshot-4-picker.png" alt="Karafilt alternate-version picker" width="820">
 </p>
 
+### Party Mode
+
+Host a **karaoke party** straight from the extension: click **Party** in the side-panel header and a host page opens with a QR code. Guests scan it on their phones (no account needed), paste a YouTube link, and add songs to a **shared, real-time queue**. Songs play in order on your screen and auto-advance, with **synced lyrics** on the party screen and every guest's phone — and your vocal filter removing the lead vocals so everyone takes turns singing. Start filtering with a right-click (**Filter this tab with Karafilt**) or `Ctrl+Shift+K` — no side panel needed.
+
 ## Installation
 
 ### From Chrome Web Store

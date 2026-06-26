@@ -922,3 +922,62 @@ footer {
   font-size: 11px;
   color: #6b7294;
 }
+
+/* ── Party mode (compact header pill) ────────────────────────────────────── */
+.logo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.party-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.1);
+  color: #c4b5fd;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
+}
+
+.party-pill:hover {
+  background: rgba(139, 92, 246, 0.18);
+  color: #ddd6fe;
+}
+
+.party-pill svg {
+  flex-shrink: 0;
+}
+
+.party-pill.active {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.45);
+}
+
+.party-pill-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* Rating: the comment + submit are revealed (by sidepanel.js) only after a
+   star is chosen, so the section stays compact until the user decides to rate. */
+.rating-expand {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
