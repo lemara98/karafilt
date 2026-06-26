@@ -5,6 +5,31 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-26
+
+### Added
+- **Party Mode — a crowd-sourced karaoke jukebox.** A new **Party** button in the
+  side-panel header starts a party and opens a host player page with a QR code.
+  Guests scan it on their phones (no account needed), paste a YouTube link, and add
+  songs to a shared, real-time queue. Songs play in order on the host's screen and
+  auto-advance, with vocals filtered out — so everyone takes turns singing.
+- **Synced lyrics on the party screen and guests' phones.** The party player shows
+  time-synced, word-by-word lyrics beside the video — with font, size and
+  highlight-colour controls, a focus (3-line) mode, and a "wrong song?" picker —
+  and each guest's phone follows along in sync.
+- **Vocal-filter controls on the party page.** The player page auto-connects to
+  the extension and shows live **Vocals on/off** status plus the **mode** and
+  **removal amount**, so you can run the whole party without opening the side
+  panel. Start filtering panel-free by right-clicking the page (**Filter this tab
+  with Karafilt**) or pressing `Ctrl+Shift+K`.
+- **Party stats** — on your account page (parties hosted, songs queued/played,
+  guests) and the admin dashboard (totals, hosts, guests, top party songs).
+
+### Changed
+- **Compact rating panel.** "Rate the filter on this song" now shows just the
+  stars and the community rating; the optional comment box and Submit button
+  appear only after you pick a star.
+
 ## [0.4.0] — 2026-06-25
 
 ### Added
@@ -90,6 +115,7 @@ Initial public release.
 - Smoother, lower-latency audio pipeline (buffered, gapless playback) and
   refined LRCLib search (throttling, deduplication, progressive results).
 
+[0.5.0]: https://github.com/lemara98/karafilt/releases/tag/v0.5.0
 [0.4.0]: https://github.com/lemara98/karafilt/releases/tag/v0.4.0
 [0.3.0]: https://github.com/lemara98/karafilt/releases/tag/v0.3.0
 [0.2.1]: https://github.com/lemara98/karafilt/releases/tag/v0.2.1

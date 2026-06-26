@@ -95,6 +95,9 @@ produced for upload.
 > • Pick the right match when a song has multiple versions
 > • Vocal/instrumental mix slider — keep a hint of the original vocal as a guide
 > • Works on any site that plays audio
+> • Party Mode — host a karaoke party: friends scan a QR, add YouTube songs to a
+>   shared queue from their phones, and everyone takes turns singing with synced
+>   lyrics and vocals removed
 >
 > **Free, with an account**
 > Karafilt is completely free. You sign in once with a free account; you can

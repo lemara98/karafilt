@@ -13,6 +13,7 @@ const dbg = (...args) => { if (KF_DEBUG) console.log(...args); };
 
 let offscreenReady = false;
 let currentMode = "stft";
+let currentMix = 1; // 0..1 fraction, mirrored to the offscreen worklet via SET_MIX
 let capturedTabId = null;
 let capturedTabUrl = null;
 
@@ -241,6 +242,18 @@ function toggleCaptureForTab(tab) {
     });
 }
 
+// True for the website party host page. There the page has its own UI (lyrics,
+// queue, filter controls), so the filter triggers skip opening the
+// space-consuming side panel and just toggle capture.
+function isPartyHostPage(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./, "") === "karafilt.com" && u.pathname.startsWith("/party/");
+  } catch {
+    return false;
+  }
+}
+
 // Auto-inject the content script into every open http(s) tab on extension
 // load. Manifest V3 content_scripts only run on pages loaded AFTER the
 // extension is enabled — without this, every chrome://extensions reload
@@ -281,7 +294,9 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "toggle-filter") return;
   if (tab && tab.id && tab.url && /^https?:/.test(tab.url)) {
     bindPanelToTab(tab.id);
-    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+    // On the party host page, don't steal space with the side panel — the page
+    // has its own UI. Elsewhere the panel is the only surface, so open it.
+    if (!isPartyHostPage(tab.url)) chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   }
   toggleCaptureForTab(tab);
 });
@@ -315,7 +330,8 @@ chrome.runtime.onStartup.addListener(setupContextMenu);
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== FILTER_TAB_MENU_ID || !tab || !tab.id) return;
   bindPanelToTab(tab.id);
-  chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  // Party host page provides its own UI — toggle the filter without the panel.
+  if (!isPartyHostPage(tab.url)) chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   toggleCaptureForTab(tab);
 });
 
@@ -727,6 +743,29 @@ async function fetchFromLRCLib(artist, track, opts) {
   return result;
 }
 
+// Filter controls shared by the internal side-panel messages and the external
+// Party Mode page bridge (onMessageExternal below). setFilterMode re-segments
+// usage so time is attributed per mode; setFilterMix mirrors the 0..1 value to
+// the offscreen worklet.
+function setFilterMix(value) {
+  currentMix = value;
+  chrome.runtime.sendMessage({ type: "SET_MIX", value });
+}
+function setFilterMode(value) {
+  currentMode = value;
+  if (currentUsage) {
+    const meta = {
+      videoKey: currentUsage.videoKey,
+      songTitle: currentUsage.songTitle,
+      trackName: currentUsage.trackName,
+      artistName: currentUsage.artistName,
+    };
+    flushUsage(Date.now());
+    openUsage(capturedTabUrl, currentMode, meta);
+  }
+  chrome.runtime.sendMessage({ type: "SET_MODE", value });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Messages from the offscreen document. (AI status/lag/seek are gone now that
   // all processing runs in-browser in the worklet.)
@@ -770,24 +809,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case "SET_MIX":
-      chrome.runtime.sendMessage({ type: "SET_MIX", value: message.value });
+      setFilterMix(message.value);
       break;
 
     case "SET_MODE":
-      currentMode = message.value;
-      // Attribute time per mode: close the current segment and open a fresh one
-      // for the same song under the new mode.
-      if (currentUsage) {
-        const meta = {
-          videoKey: currentUsage.videoKey,
-          songTitle: currentUsage.songTitle,
-          trackName: currentUsage.trackName,
-          artistName: currentUsage.artistName,
-        };
-        flushUsage(Date.now());
-        openUsage(capturedTabUrl, currentMode, meta);
-      }
-      chrome.runtime.sendMessage({ type: "SET_MODE", value: message.value });
+      setFilterMode(message.value);
       break;
 
     case "SET_CURRENT_SONG": {
@@ -1024,6 +1050,148 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: "network", rating: null });
         }
       })();
+      return true; // async response
+
+    case "PARTY_PING":
+      // Liveness check from the party page's content-script bridge.
+      sendResponse({ ok: true, version: chrome.runtime.getManifest().version });
+      return false;
+
+    case "PARTY_GET_STATUS": {
+      // Live filter status for the party page's on-page panel. thisTab tells the
+      // page whether THIS player tab is the one being filtered.
+      const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+      sendResponse({
+        installed: true,
+        filtering: capturedTabId !== null,
+        thisTab: onThisTab,
+        mode: currentMode,
+        mix: currentMix,
+      });
+      return false;
+    }
+
+    case "PARTY_SET_MODE": {
+      // Control the already-running filter from the party page (mode). Guarded so
+      // the page can only change the filter on its own tab.
+      const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+      if (onThisTab && typeof message.value === "string") setFilterMode(message.value);
+      sendResponse({ ok: onThisTab, mode: currentMode });
+      return false;
+    }
+
+    case "PARTY_SET_MIX": {
+      const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+      if (onThisTab && typeof message.value === "number") setFilterMix(message.value);
+      sendResponse({ ok: onThisTab, mix: currentMix });
+      return false;
+    }
+
+    case "CREATE_PARTY":
+      // Host starts a party. POST /api/party/create with the site session cookie
+      // (same auth path as GET_ACCOUNT_STATUS). On success: remember the room in
+      // storage.session, open the host player tab, and return code + joinUrl so
+      // the panel can render the QR. The player page never navigates between
+      // songs, so the user's tab-audio capture survives the whole party.
+      (async () => {
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false, error: "no_site" });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/party/create`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({ name: message.name || null }),
+            },
+            8000,
+          );
+          if (!res.ok) {
+            sendResponse({ ok: false, status: res.status, loginUrl: `${base}/login` });
+            return;
+          }
+          const data = await res.json();
+          const room = { code: data.code, joinUrl: data.joinUrl, hostTabId: null };
+          // Open the player tab with ?host=1 so it renders the host player; the
+          // bare joinUrl (the QR target) always opens the guest add-a-song view.
+          const playerUrl =
+            data.joinUrl + (data.joinUrl.includes("?") ? "&" : "?") + "host=1";
+          try {
+            const tab = await chrome.tabs.create({ url: playerUrl, active: true });
+            room.hostTabId = tab.id ?? null;
+          } catch {}
+          await chrome.storage.session.set({ partyRoom: room });
+          sendResponse({ ok: true, ...room });
+        } catch {
+          sendResponse({ ok: false, error: "network" });
+        }
+      })();
+      return true; // async response
+
+    case "GET_PARTY":
+      // Restore the active party so the panel can re-render the QR after reopen.
+      chrome.storage.session.get({ partyRoom: null }, ({ partyRoom }) => {
+        sendResponse({ partyRoom });
+      });
+      return true; // async response
+
+    case "GET_PARTY_COUNT":
+      // Live "N in queue" for the panel. Anonymous read of the room state; routed
+      // through the SW so its host permission covers the cross-origin call.
+      (async () => {
+        const code = typeof message.code === "string" ? message.code : null;
+        if (!code) {
+          sendResponse({ ok: false });
+          return;
+        }
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/party/${encodeURIComponent(code)}/state`,
+            { headers: { Accept: "application/json" } },
+            8000,
+          );
+          if (res.ok) {
+            const data = await res.json();
+            sendResponse({
+              ok: true,
+              found: data.found,
+              status: data.status,
+              count: data.count ?? 0,
+              nowPlaying: data.nowPlaying ?? null,
+            });
+          } else {
+            sendResponse({ ok: false, status: res.status });
+          }
+        } catch {
+          sendResponse({ ok: false, error: "network" });
+        }
+      })();
+      return true; // async response
+
+    case "END_PARTY":
+      // Clear the panel's local pointer to the party. (The room itself is closed
+      // from the player page's "End party" control.)
+      chrome.storage.session.remove("partyRoom", () => {
+        sendResponse({ ok: true });
+      });
       return true; // async response
   }
 });
