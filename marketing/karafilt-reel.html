@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karafilt — promo reel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg0:#0a0a16; --bg1:#0d0b1f; --panel:#16132e;
+    --p1:#8b7cff; --p2:#b46cff; --ink:#f1efff; --mut:#b9b4d6;
+    --grad:linear-gradient(120deg,var(--p1),var(--p2));
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg0);
+    color:var(--ink);
+    font-family:"Space Grotesk",-apple-system,Segoe UI,Roboto,sans-serif;
+    overflow:hidden;
+    display:grid;place-items:center;
+  }
+  /* 16:9 stage, scales to fit any screen while keeping layout exact */
+  #stage{
+    position:relative; width:1280px; height:720px;
+    background:
+      radial-gradient(1200px 700px at 18% 12%, #1a1640 0%, rgba(26,22,64,0) 60%),
+      radial-gradient(1000px 800px at 88% 90%, #241a4d 0%, rgba(36,26,77,0) 55%),
+      linear-gradient(160deg,var(--bg1),var(--bg0));
+    overflow:hidden;
+    box-shadow:0 40px 120px rgba(0,0,0,.6);
+  }
+  /* faint grid + grain for depth */
+  #stage::before{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(139,124,255,.05) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(139,124,255,.05) 1px,transparent 1px);
+    background-size:48px 48px; mask-image:radial-gradient(900px 600px at 50% 50%,#000 30%,transparent 80%);
+  }
+  canvas#bgwave{position:absolute;inset:0;opacity:.5}
+
+  .scene{position:absolute;inset:0;display:grid;place-items:center;opacity:0;}
+  .scene.on{opacity:1}
+
+  /* ---------- shared logo ---------- */
+  .lockup{display:flex;align-items:center;gap:22px}
+  .eq{width:132px;height:96px}
+  .eq rect{fill:url(#lg)}
+  .wm{font-size:96px;font-weight:700;letter-spacing:-5px;line-height:1}
+  .wm .dot{color:var(--p2)}
+  .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+  /* ---------- scene 1: logo build ---------- */
+  #s1 .lockup{transform:scale(1.15)}
+  #s1 .wm{opacity:0;transform:translateX(-18px)}
+  #s1.on .wm{animation:wmIn .7s .55s cubic-bezier(.2,.8,.2,1) forwards}
+  @keyframes wmIn{to{opacity:1;transform:none}}
+  #s1 .tagline{position:absolute;bottom:150px;font-size:30px;color:var(--mut);opacity:0;font-weight:500}
+  #s1.on .tagline{animation:fadeUp .7s 1.05s ease forwards}
+  #s1 .tagline b{color:var(--ink)}
+
+  /* ---------- scene 2: vocals out ---------- */
+  #s2 .wrap{width:980px;text-align:center}
+  #s2 h2{font-size:60px;font-weight:700;line-height:1.05;margin-bottom:34px;opacity:0}
+  #s2.on h2{animation:fadeUp .7s .1s ease forwards}
+  #s2 .vis{position:relative;height:200px}
+  #s2 canvas{position:absolute;inset:0;width:100%;height:100%}
+  #s2 .chip{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(.8);
+    padding:14px 26px;border-radius:999px;background:rgba(180,108,255,.14);
+    border:1px solid rgba(180,108,255,.5);font-size:26px;font-weight:600;color:#e9defc;
+    opacity:0;backdrop-filter:blur(4px)}
+  #s2.on .chip{animation:pop .6s 1.5s cubic-bezier(.2,1.3,.3,1) forwards}
+
+  /* ---------- scene 3: synced lyrics ---------- */
+  #s3 .panel{width:760px;background:linear-gradient(180deg,#17142f,#120f26);
+    border:1px solid rgba(139,124,255,.18);border-radius:22px;padding:42px 46px;
+    box-shadow:0 30px 80px rgba(0,0,0,.45)}
+  #s3 .head{display:flex;align-items:center;gap:12px;color:var(--mut);font-size:18px;margin-bottom:8px}
+  #s3 .badge{font-size:13px;letter-spacing:.5px;color:#bdaaff;border:1px solid rgba(139,124,255,.5);
+    border-radius:6px;padding:3px 8px;text-transform:uppercase}
+  #s3 .line{font-size:34px;font-weight:600;color:#5b5780;margin:18px 0;transition:color .4s;position:relative}
+  #s3 .line.active{color:var(--ink)}
+  #s3 .line .fill{position:absolute;left:0;top:0;white-space:nowrap;overflow:hidden;width:0;
+    background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  #s3 .progress{height:5px;border-radius:99px;background:rgba(255,255,255,.08);margin-top:26px;overflow:hidden}
+  #s3 .progress i{display:block;height:100%;width:0;background:var(--grad)}
+
+  /* ---------- scene 4: features ---------- */
+  #s4 .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;width:920px}
+  #s4 .card{background:linear-gradient(180deg,#17142f,#120f26);border:1px solid rgba(139,124,255,.16);
+    border-radius:18px;padding:28px 30px;display:flex;gap:18px;align-items:center;opacity:0;transform:translateY(22px)}
+  #s4.on .card{animation:fadeUp .6s ease forwards}
+  #s4.on .card:nth-child(1){animation-delay:.15s}
+  #s4.on .card:nth-child(2){animation-delay:.30s}
+  #s4.on .card:nth-child(3){animation-delay:.45s}
+  #s4.on .card:nth-child(4){animation-delay:.60s}
+  #s4 .ic{flex:0 0 56px;height:56px;border-radius:14px;display:grid;place-items:center;
+    background:rgba(139,124,255,.13);font-size:28px}
+  #s4 .t{font-size:24px;font-weight:600}
+  #s4 .d{font-size:16px;color:var(--mut);margin-top:3px}
+
+  /* ---------- scene 5: CTA ---------- */
+  #s5 .wrap{text-align:center}
+  #s5 .lockup{justify-content:center;margin-bottom:30px}
+  #s5 h2{font-size:48px;font-weight:700}
+  #s5 h2 .grad{font-weight:700}
+  #s5 .sub{font-size:24px;color:var(--mut);margin-top:14px}
+  #s5 .btn{margin-top:38px;display:inline-block;padding:18px 40px;border-radius:14px;
+    font-size:24px;font-weight:600;color:#0a0a16;background:var(--grad);
+    box-shadow:0 14px 40px rgba(140,110,255,.45);animation:breathe 2.4s ease-in-out infinite}
+  #s5 .url{margin-top:22px;font-size:22px;color:#cbb8ff;letter-spacing:.3px}
+
+  @keyframes fadeUp{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+  @keyframes pop{to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+  @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+
+  @media (prefers-reduced-motion: reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bgwave" width="1280" height="720"></canvas>
+
+  <!-- gradient defs used by all inline logos -->
+  <svg width="0" height="0" style="position:absolute"><defs>
+    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8b7cff"/><stop offset="100%" stop-color="#b46cff"/>
+    </linearGradient>
+  </defs></svg>
+
+  <!-- SCENE 1 -->
+  <section class="scene" id="s1">
+    <div class="lockup">
+      <svg class="eq" viewBox="0 0 90 100" id="eq1"></svg>
+      <div class="wm">karafilt<span class="dot">.</span></div>
+    </div>
+    <div class="tagline">Turn any tab into a <b>karaoke machine.</b></div>
+  </section>
+
+  <!-- SCENE 2 -->
+  <section class="scene" id="s2">
+    <div class="wrap">
+      <h2>The vocals drop out.<br>The <span class="grad">music stays.</span></h2>
+      <div class="vis">
+        <canvas id="vcanvas" width="980" height="200"></canvas>
+        <div class="chip">🎤 vocals removed · in real time</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 3 -->
+  <section class="scene" id="s3">
+    <div class="panel">
+      <div class="head"><svg class="eq" style="width:40px;height:30px" viewBox="0 0 90 100" id="eq3"></svg>
+        <span>karafilt<span style="color:var(--p2)">.</span></span>
+        <span class="badge">synced</span>
+      </div>
+      <div class="lyrics">
+        <div class="line"><span class="base">Is this the real life?</span><span class="fill">Is this the real life?</span></div>
+        <div class="line"><span class="base">Is this just fantasy?</span><span class="fill">Is this just fantasy?</span></div>
+        <div class="line"><span class="base">Caught in a landslide</span><span class="fill">Caught in a landslide</span></div>
+        <div class="line"><span class="base">No escape from reality</span><span class="fill">No escape from reality</span></div>
+      </div>
+      <div class="progress"><i></i></div>
+    </div>
+  </section>
+
+  <!-- SCENE 4 -->
+  <section class="scene" id="s4">
+    <div class="grid">
+      <div class="card"><div class="ic">⚡</div><div><div class="t">Real-time vocal removal</div><div class="d">Strips the lead vocal as the song plays</div></div></div>
+      <div class="card"><div class="ic">🎶</div><div><div class="t">Synced karaoke lyrics</div><div class="d">Word-by-word highlight, in a focus view</div></div></div>
+      <div class="card"><div class="ic">🔒</div><div><div class="t">100% in-browser — free</div><div class="d">WebAssembly DSP, audio never leaves your machine</div></div></div>
+      <div class="card"><div class="ic">🌐</div><div><div class="t">Works on any site</div><div class="d">YouTube, Spotify Web, SoundCloud — anywhere</div></div></div>
+    </div>
+  </section>
+
+  <!-- SCENE 5 -->
+  <section class="scene" id="s5">
+    <div class="wrap">
+      <div class="lockup">
+        <svg class="eq" viewBox="0 0 90 100" id="eq5"></svg>
+        <div class="wm">karafilt<span class="dot">.</span></div>
+      </div>
+      <h2>Turn any tab into a <span class="grad">karaoke machine.</span></h2>
+      <div class="sub">Sign in, hit play, and sing. Free.</div>
+      <div class="btn">Start Filtering</div>
+      <div class="url">karafilt.com</div>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ---- build the equalizer logo (the brand "K" of bars) ---- */
+const BARS=[[6,6,10,68],[22,32,10,16],[34,24,10,32],[46,14,10,22],[46,44,10,22],[58,6,10,20],[58,54,10,20]];
+function buildEq(svg){
+  const g=document.createElementNS('http://www.w3.org/2000/svg','g');
+  g.setAttribute('transform','translate(0 10)');
+  const rects=BARS.map(([x,y,w,h])=>{
+    const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+    r.setAttribute('x',x);r.setAttribute('width',w);r.setAttribute('rx',2);
+    r.dataset.cy=y+h/2; r.dataset.base=h;
+    svgSet(r,y,h); g.appendChild(r); return r;
+  });
+  svg.setAttribute('viewBox','0 0 74 100'); svg.appendChild(g);
+  return rects;
+}
+function svgSet(r,y,h){r.setAttribute('y',y);r.setAttribute('height',h);}
+const eqs=[buildEq(eq1),buildEq(eq3),buildEq(eq5)];
+let t0=performance.now();
+function animEq(now){
+  const t=(now-t0)/1000;
+  eqs.forEach(rects=>rects.forEach((r,i)=>{
+    if(i===0)return; // keep the tall spine of the K steady
+    const base=+r.dataset.base, cy=+r.dataset.cy;
+    const k=0.55+0.55*(0.5+0.5*Math.sin(t*6+i*1.3))*Math.abs(Math.sin(t*3+i));
+    const h=base*(0.5+0.9*k);
+    svgSet(r,cy-h/2,h);
+  }));
+  requestAnimationFrame(animEq);
+}
+requestAnimationFrame(animEq);
+
+/* ---- ambient background wave ---- */
+const bg=document.getElementById('bgwave'),bx=bg.getContext('2d');
+function drawBg(now){
+  const t=now/1000; bx.clearRect(0,0,1280,720);
+  for(let l=0;l<3;l++){
+    bx.beginPath();
+    for(let x=0;x<=1280;x+=8){
+      const y=360+Math.sin(x*0.006+t*(0.6+l*0.25)+l)*40*(1+l*0.5)
+              +Math.sin(x*0.013-t*0.8)*18;
+      x===0?bx.moveTo(x,y):bx.lineTo(x,y);
+    }
+    bx.strokeStyle=l===0?'rgba(139,124,255,.25)':l===1?'rgba(180,108,255,.16)':'rgba(139,124,255,.10)';
+    bx.lineWidth=2; bx.stroke();
+  }
+  requestAnimationFrame(drawBg);
+}
+requestAnimationFrame(drawBg);
+
+/* ---- scene 2 "vocals out" visualizer ---- */
+const vc=document.getElementById('vcanvas'),vx=vc.getContext('2d');
+let s2start=0;
+function drawVoc(now){
+  const t=now/1000; vx.clearRect(0,0,980,200);
+  const phase=s2start?Math.min(1,(now-s2start)/2200):0; // 0..1 vocals fading out
+  const mid=100, n=980;
+  // instrumental layer (stays)
+  vx.beginPath();
+  for(let x=0;x<=n;x+=4){
+    const y=mid+Math.sin(x*0.04+t*3)*22+Math.sin(x*0.017-t*2)*14;
+    x===0?vx.moveTo(x,y):vx.lineTo(x,y);
+  }
+  vx.strokeStyle='rgba(139,124,255,.9)';vx.lineWidth=3;vx.stroke();
+  // vocal layer (spiky, fades + lifts away)
+  vx.save();
+  vx.globalAlpha=1-phase; vx.translate(0,-phase*70);
+  vx.beginPath();
+  for(let x=0;x<=n;x+=3){
+    const env=Math.abs(Math.sin(x*0.012+t*1.5));
+    const y=mid+Math.sin(x*0.13+t*9)*42*env;
+    x===0?vx.moveTo(x,y):vx.lineTo(x,y);
+  }
+  vx.strokeStyle='rgba(255,140,180,'+(0.85)+')';vx.lineWidth=2;vx.stroke();
+  vx.restore();
+  requestAnimationFrame(drawVoc);
+}
+requestAnimationFrame(drawVoc);
+
+/* ---- scene 3 karaoke highlight ---- */
+let s3timers=[];
+function runLyrics(){
+  s3timers.forEach(clearTimeout); s3timers=[];
+  const lines=[...document.querySelectorAll('#s3 .line')];
+  const prog=document.querySelector('#s3 .progress i');
+  lines.forEach(l=>{l.classList.remove('active');l.querySelector('.fill').style.transition='none';l.querySelector('.fill').style.width='0';});
+  prog.style.transition='none'; prog.style.width='0';
+  requestAnimationFrame(()=>{prog.style.transition='width 4s linear';prog.style.width='100%';});
+  lines.forEach((l,i)=>{
+    s3timers.push(setTimeout(()=>{
+      lines.forEach(x=>x.classList.remove('active')); l.classList.add('active');
+      const f=l.querySelector('.fill');
+      f.style.transition='none'; f.style.width='0';
+      requestAnimationFrame(()=>{f.style.transition='width .85s linear';f.style.width='100%';});
+    },i*1000));
+  });
+}
+
+/* ---- scene controller ---- */
+const scenes=[
+  {el:'s1',dur:4200},
+  {el:'s2',dur:4600,enter:()=>{s2start=performance.now();}},
+  {el:'s3',dur:4600,enter:runLyrics},
+  {el:'s4',dur:4200},
+  {el:'s5',dur:4400},
+];
+let idx=-1;
+function next(){
+  if(idx>=0) document.getElementById(scenes[idx].el).classList.remove('on');
+  idx=(idx+1)%scenes.length;
+  const s=scenes[idx];
+  const el=document.getElementById(s.el);
+  el.classList.add('on');
+  s.enter&&s.enter();
+  setTimeout(next,s.dur);
+}
+next();
+window.__reelLoopMs = scenes.reduce((a,s)=>a+s.dur,0); // ~22s, used by the recorder
+</script>
+</body>
+</html>
