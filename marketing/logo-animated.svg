@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 100" font-family="Space Grotesk, Segoe UI, sans-serif" font-weight="700" role="img" aria-label="karafilt animated logo">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8b7cff"/>
+      <stop offset="100%" stop-color="#b46cff"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f1efff" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#f1efff" stop-opacity="0"/>
+    </linearGradient>
+    <style>
+      /* Each bar dances like a live equalizer, growing from its baseline. */
+      .bar { transform-box: fill-box; transform-origin: 50% 100%; fill: url(#g); }
+      .b1 { animation: eq 1.05s ease-in-out infinite;        animation-delay: 0.00s; }
+      .b2 { animation: eq 0.78s ease-in-out infinite;        animation-delay: 0.18s; }
+      .b3 { animation: eq 0.92s ease-in-out infinite;        animation-delay: 0.30s; }
+      .b4 { animation: eq 0.70s ease-in-out infinite;        animation-delay: 0.06s; }
+      .b5 { animation: eq 0.86s ease-in-out infinite;        animation-delay: 0.40s; }
+      .b6 { animation: eq 0.74s ease-in-out infinite;        animation-delay: 0.24s; }
+      .b7 { animation: eq 0.98s ease-in-out infinite;        animation-delay: 0.12s; }
+      @keyframes eq {
+        0%, 100% { transform: scaleY(0.55); }
+        50%      { transform: scaleY(1.18); }
+      }
+      .word { fill: #f1efff; }
+      .dot  { fill: #b46cff; animation: pulse 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+      @keyframes pulse { 0%,100%{ transform: scale(1); opacity:1 } 50%{ transform: scale(1.25); opacity:.7 } }
+      @media (prefers-reduced-motion: reduce) {
+        .bar, .dot { animation: none; }
+        .bar { transform: scaleY(1); }
+      }
+    </style>
+  </defs>
+
+  <g transform="translate(0 10)">
+    <rect class="bar b1" x="6"  y="6"  width="10" height="68" rx="2"/>
+    <rect class="bar b2" x="22" y="32" width="10" height="16" rx="2"/>
+    <rect class="bar b3" x="34" y="24" width="10" height="32" rx="2"/>
+    <rect class="bar b4" x="46" y="14" width="10" height="22" rx="2"/>
+    <rect class="bar b5" x="46" y="44" width="10" height="22" rx="2"/>
+    <rect class="bar b6" x="58" y="6"  width="10" height="20" rx="2"/>
+    <rect class="bar b7" x="58" y="54" width="10" height="20" rx="2"/>
+  </g>
+
+  <text class="word" x="98" y="73" font-size="64" letter-spacing="-2.6">karafilt<tspan class="dot">.</tspan></text>
+</svg>
