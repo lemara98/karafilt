@@ -485,6 +485,38 @@ header {
   flex-shrink: 0;
 }
 
+/* Auto-close countdown bar — visible only while the auto-open grace timer is
+   running (.counting, set by sidepanel.js). Duration must match
+   ALTS_AUTO_CLOSE_MS in sidepanel.js. */
+.alternatives-autoclose {
+  display: none;
+  height: 2px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: rgba(139, 92, 246, 0.15);
+  overflow: hidden;
+}
+
+.alternatives-bar.open.counting .alternatives-autoclose {
+  display: block;
+}
+
+.alternatives-autoclose span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  transform-origin: left;
+}
+
+.alternatives-bar.counting .alternatives-autoclose span {
+  animation: kf-alts-autoclose 5s linear forwards;
+}
+
+@keyframes kf-alts-autoclose {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
 .alternatives-list {
   display: none;
   flex-direction: column;
@@ -667,9 +699,9 @@ body { width: 100% !important; }
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   color: #b0b4d0;
-  margin-bottom: 8px;
+  margin-top: 4px;
 }
 
 .community-rating .cr-stars {
@@ -685,17 +717,18 @@ body { width: 100% !important; }
   color: #8b90b0;
 }
 
+/* Stars sit inline with the section label (see sidepanel.html) — sized down
+   so the whole rating header stays a single compact row. */
 .filter-rating .rating-stars {
   display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 2px;
 }
 
 .filter-rating .star {
   background: none;
   border: none;
-  padding: 2px;
-  font-size: 26px;
+  padding: 1px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
   color: #3a3e5a;

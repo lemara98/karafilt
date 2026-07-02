@@ -65,6 +65,24 @@ let lastPlaybackDuration = 0;
 // match currently rendered in parsedLines/plainLyrics.
 let allMatches = [];
 let currentMatchIdx = -1;
+// Auto-open bookkeeping for the matches picker: the dropdown opens by itself
+// once per distinct match list, then closes again after 5s of no interaction
+// (keeping the already-rendered default match). altsAutoOpenKey remembers the
+// last list we auto-opened for so repeated LYRICS_STATE messages don't re-open
+// a picker the user (or the timer) already dismissed. While the timer runs,
+// the bar carries .counting, which shows a draining countdown strip (CSS
+// animation — its 5s duration must match ALTS_AUTO_CLOSE_MS).
+const ALTS_AUTO_CLOSE_MS = 5000;
+let altsAutoCloseTimer = null;
+let altsAutoOpenKey = "";
+
+function cancelAltsAutoClose() {
+  if (altsAutoCloseTimer) {
+    clearTimeout(altsAutoCloseTimer);
+    altsAutoCloseTimer = null;
+  }
+  if (altsBarEl) altsBarEl.classList.remove("counting");
+}
 
 // --- Title cleaning (shared/song-match.js, loaded before this script) ---
 const cleanTitle = (window.KarafiltSongMatch && window.KarafiltSongMatch.cleanTitle)
@@ -126,11 +144,28 @@ function renderMatchesPicker() {
     altsBarEl.style.display = "none";
     altsBarEl.classList.remove("open");
     altsListEl.innerHTML = "";
+    cancelAltsAutoClose();
+    altsAutoOpenKey = "";
     return;
   }
   altsBarEl.style.display = "";
-  // Auto-open whenever there are alternatives to switch to.
-  if (allMatches.length > 1) altsBarEl.classList.add("open");
+  // Auto-open once per distinct match list, then close after 5s unless the
+  // user interacts — no response means they're fine with the default match.
+  const matchKey = allMatches
+    .map((m) => `${m.trackName || ""}|${m.artistName || ""}|${m.source || ""}`)
+    .join("~");
+  if (allMatches.length > 1 && matchKey !== altsAutoOpenKey) {
+    altsAutoOpenKey = matchKey;
+    altsBarEl.classList.add("open");
+    cancelAltsAutoClose();
+    // Restart the CSS countdown animation from full width.
+    void altsBarEl.offsetWidth;
+    altsBarEl.classList.add("counting");
+    altsAutoCloseTimer = setTimeout(() => {
+      altsAutoCloseTimer = null;
+      altsBarEl.classList.remove("open", "counting");
+    }, ALTS_AUTO_CLOSE_MS);
+  }
   // Header counter shows alternatives only (excluding the current pick).
   altsCountEl.textContent = String(Math.max(0, allMatches.length - 1));
   altsListEl.innerHTML = "";
@@ -197,8 +232,13 @@ function switchToMatch(index) {
 
 if (altsToggleEl) {
   altsToggleEl.addEventListener("click", () => {
+    cancelAltsAutoClose();
     altsBarEl.classList.toggle("open");
   });
+}
+// Hovering the open list counts as a response — don't yank it away mid-read.
+if (altsListEl) {
+  altsListEl.addEventListener("pointerenter", cancelAltsAutoClose);
 }
 
 // --- Manual refresh ---
