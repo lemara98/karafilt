@@ -8,6 +8,11 @@
 // (The page can never START the filter — that's still a user gesture on the
 // extension: the right-click menu or Ctrl+Shift+K.)
 (function () {
+  // Injected both by manifest content_scripts and programmatically after an
+  // extension reload (injectIntoOpenTabs) — never register the relay twice.
+  if (window.__karafiltPartyBridgeLoaded) return;
+  window.__karafiltPartyBridgeLoaded = true;
+
   const FROM_PAGE = "karafilt-party";
   const TO_PAGE = "karafilt-party-ext";
   const ALLOWED = new Set([
@@ -31,7 +36,10 @@
         );
       });
     } catch {
-      window.postMessage({ source: TO_PAGE, reqId, response: null }, location.origin);
+      // chrome.runtime is gone — this bridge belongs to a reloaded/removed
+      // extension instance. Stay silent so a freshly injected live bridge
+      // (or the page's own timeout) settles the request instead of this
+      // instant null masquerading as "extension not installed".
     }
   });
 
