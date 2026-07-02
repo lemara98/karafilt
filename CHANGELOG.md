@@ -5,6 +5,31 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-07-02
+
+### Added
+- **Auto-dismissing "Wrong song?" picker.** When several lyrics matches come back,
+  the picker still opens by itself — but now a thin countdown bar drains over five
+  seconds and, if you don't touch it, the picker folds away and keeps the default
+  match. Hovering the list or clicking the toggle cancels the countdown.
+
+### Changed
+- **New toolbar icon.** The extension icon now matches the karafilt.com favicon —
+  the K-bars glyph on the dark rounded square — at every size.
+- **Party button facelift.** The header pill now uses the same 🎉 emoji as the
+  website's party pages, with a gradient fill and glow to match the brand.
+- **One-row rating.** The "Rate the filter" stars sit inline with the label, so
+  the rating section takes about half the vertical space it used to.
+
+### Fixed
+- **Party page no longer shows "Vocals: OFF" while the filter is audibly running.**
+  Capture state (and the current mode/removal settings) now survive the service
+  worker being suspended mid-party, the page bridge is re-injected into open party
+  tabs after an extension update/reload, and a stale bridge from a previous
+  extension instance can no longer mask the live one's replies.
+- The `Ctrl+Shift+K` toggle now hands its captured stream ID straight to the
+  capture pipeline instead of requesting a second one outside the user gesture.
+
 ## [0.5.0] — 2026-06-26
 
 ### Added

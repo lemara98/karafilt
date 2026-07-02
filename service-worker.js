@@ -17,6 +17,60 @@ let currentMix = 1; // 0..1 fraction, mirrored to the offscreen worklet via SET_
 let capturedTabId = null;
 let capturedTabUrl = null;
 
+// Single point of truth for "which tab is being filtered", mirrored to
+// storage.session. The in-memory vars die with every MV3 SW eviction while the
+// offscreen document keeps filtering audibly — without the mirror, a restarted
+// SW answers PARTY_GET_STATUS with "filter off" mid-party even though the
+// filter is clearly running. recoverCaptureState() restores the mirror on boot.
+function setCapturedTab(tabId, url) {
+  capturedTabId = tabId;
+  capturedTabUrl = url;
+  if (tabId === null) {
+    chrome.storage.session.remove("capturedTab", () => void chrome.runtime.lastError);
+  } else {
+    chrome.storage.session.set({ capturedTab: { id: tabId, url: url || null } });
+  }
+}
+
+// Mode/mix survive SW eviction the same way, so a restarted SW reports the
+// filter's real settings instead of the "stft"/100% defaults.
+function persistFilterPrefs() {
+  chrome.storage.session.set({ filterPrefs: { mode: currentMode, mix: currentMix } });
+}
+
+async function recoverCaptureState() {
+  try {
+    const { capturedTab, filterPrefs } = await chrome.storage.session.get({
+      capturedTab: null,
+      filterPrefs: null,
+    });
+    if (filterPrefs) {
+      if (typeof filterPrefs.mode === "string") currentMode = filterPrefs.mode;
+      if (typeof filterPrefs.mix === "number") currentMix = filterPrefs.mix;
+    }
+    if (!capturedTab || capturedTabId !== null) return;
+    // Only trust the mirror while the offscreen document (the actual filter)
+    // is still alive; otherwise the capture truly ended with the old SW.
+    let offscreenAlive = true;
+    if (chrome.runtime.getContexts) {
+      const contexts = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+      });
+      offscreenAlive = !!(contexts && contexts.length > 0);
+    }
+    if (capturedTabId !== null) return; // a capture started while we awaited
+    if (offscreenAlive) {
+      capturedTabId = capturedTab.id;
+      capturedTabUrl = capturedTab.url;
+    } else {
+      chrome.storage.session.remove("capturedTab", () => void chrome.runtime.lastError);
+    }
+  } catch (e) {
+    console.warn("[SW] recoverCaptureState failed:", e);
+  }
+}
+recoverCaptureState();
+
 // ── Filter usage tracking ───────────────────────────────────────────────────
 // A "listen segment" = one contiguous stretch with the filter active on a single
 // song in a single mode. The SW owns the timing because capture keeps running
@@ -204,8 +258,7 @@ chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   if (capturedTabId !== null && capturedTabId !== tab.id) {
     flushUsage(Date.now());
-    capturedTabId = null;
-    capturedTabUrl = null;
+    setCapturedTab(null, null);
     chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
     chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
   }
@@ -223,8 +276,7 @@ function toggleCaptureForTab(tab) {
   }
   if (capturedTabId === tab.id) {
     flushUsage(Date.now());
-    capturedTabId = null;
-    capturedTabUrl = null;
+    setCapturedTab(null, null);
     chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
     chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
     return;
@@ -232,7 +284,7 @@ function toggleCaptureForTab(tab) {
   chrome.tabCapture
     .getMediaStreamId({ targetTabId: tab.id })
     .then(async (streamId) => {
-      const result = await handleStartCapture(tab.id, undefined, streamId);
+      const result = await handleStartCapture(tab.id, streamId);
       if (result && result.success) {
         chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
       }
@@ -242,13 +294,19 @@ function toggleCaptureForTab(tab) {
     });
 }
 
-// True for the website party host page. There the page has its own UI (lyrics,
-// queue, filter controls), so the filter triggers skip opening the
-// space-consuming side panel and just toggle capture.
+// True for the website party host page (mirrors the party-bridge.js
+// content_scripts matches in manifest.json, including the localhost dev site).
+// There the page has its own UI (lyrics, queue, filter controls), so the
+// filter triggers skip opening the space-consuming side panel and just toggle
+// capture.
 function isPartyHostPage(url) {
   try {
     const u = new URL(url);
-    return u.hostname.replace(/^www\./, "") === "karafilt.com" && u.pathname.startsWith("/party/");
+    const host = u.hostname.replace(/^www\./, "");
+    return (
+      (host === "karafilt.com" || host === "localhost" || host === "127.0.0.1") &&
+      u.pathname.startsWith("/party/")
+    );
   } catch {
     return false;
   }
@@ -270,6 +328,15 @@ async function injectIntoOpenTabs() {
           target: { tabId: tab.id },
           files: ["shared/song-match.js", "content/lyrics-overlay.js"],
         });
+        // Party pages also need the postMessage bridge — without this, a host
+        // page left open across an extension reload loses its filter panel
+        // (the old bridge's runtime binding is dead) until a manual refresh.
+        if (isPartyHostPage(tab.url)) {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["content/party-bridge.js"],
+          });
+        }
       } catch {
         // Some URLs reject programmatic injection (e.g. chrome web store).
         // Silently skip — nothing we can do for those.
@@ -749,10 +816,12 @@ async function fetchFromLRCLib(artist, track, opts) {
 // the offscreen worklet.
 function setFilterMix(value) {
   currentMix = value;
+  persistFilterPrefs();
   chrome.runtime.sendMessage({ type: "SET_MIX", value });
 }
 function setFilterMode(value) {
   currentMode = value;
+  persistFilterPrefs();
   if (currentUsage) {
     const meta = {
       videoKey: currentUsage.videoKey,
@@ -777,7 +846,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.type) {
     case "START_CAPTURE":
-      if (message.mode) currentMode = message.mode;
+      if (message.mode) { currentMode = message.mode; persistFilterPrefs(); }
       dbg("[SW] START_CAPTURE mode:", currentMode, "tabId:", message.tabId);
       handleStartCapture(message.tabId, message.streamId).then((result) => {
         // Broadcast capture state so all surfaces reflect it.
@@ -789,7 +858,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true; // async response
 
     case "START_CAPTURE_DISPLAY_MEDIA":
-      if (message.mode) currentMode = message.mode;
+      if (message.mode) { currentMode = message.mode; persistFilterPrefs(); }
       dbg("[SW] START_CAPTURE_DISPLAY_MEDIA mode:", currentMode, "tabId:", message.tabId);
       handleStartCaptureViaDisplayMedia(message.tabId).then((result) => {
         if (result && result.success) {
@@ -802,8 +871,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "STOP_CAPTURE":
       dbg("[SW] STOP_CAPTURE received, forwarding to offscreen");
       flushUsage(Date.now());
-      capturedTabId = null;
-      capturedTabUrl = null;
+      setCapturedTab(null, null);
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
       chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
       break;
@@ -1206,14 +1274,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (oldUrl.origin + oldUrl.pathname !== newUrl.origin + newUrl.pathname) {
         dbg("Tab navigated away, stopping capture:", changeInfo.url);
         flushUsage(Date.now());
-        capturedTabId = null;
-        capturedTabUrl = null;
+        setCapturedTab(null, null);
         chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
         chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
       } else {
         // Same page, query/hash change. On YouTube the next video keeps /watch
         // but swaps ?v= — that's a new song, so re-segment usage.
-        capturedTabUrl = changeInfo.url;
+        setCapturedTab(capturedTabId, changeInfo.url);
         if (currentUsage) {
           const newKey = deriveVideoKey(changeInfo.url);
           if (newKey && newKey !== currentUsage.videoKey) {
@@ -1225,8 +1292,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     } catch (e) {
       // If URL parsing fails, stop capture to be safe
       flushUsage(Date.now());
-      capturedTabId = null;
-      capturedTabUrl = null;
+      setCapturedTab(null, null);
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
     }
   }
@@ -1283,8 +1349,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   });
   if (tabId === capturedTabId) {
     flushUsage(Date.now());
-    capturedTabId = null;
-    capturedTabUrl = null;
+    setCapturedTab(null, null);
     chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
     chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
   }
@@ -1300,16 +1365,14 @@ async function handleStartCaptureViaDisplayMedia(tabId) {
   try {
     if (capturedTabId !== null) {
       flushUsage(Date.now());
-      capturedTabId = null;
-      capturedTabUrl = null;
+      setCapturedTab(null, null);
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
       await new Promise((r) => setTimeout(r, 300));
     }
     const tab = await chrome.tabs.get(tabId);
     await ensureOffscreenDocument();
 
-    capturedTabId = tabId;
-    capturedTabUrl = tab.url;
+    setCapturedTab(tabId, tab.url);
     openUsage(tab.url, currentMode);
     dbg("[SW] sending START_VIA_DISPLAY_MEDIA, mode:", currentMode);
     chrome.runtime.sendMessage({
@@ -1328,8 +1391,7 @@ async function handleStartCapture(tabId, providedStreamId) {
     // Stop any existing capture first
     if (capturedTabId !== null) {
       flushUsage(Date.now());
-      capturedTabId = null;
-      capturedTabUrl = null;
+      setCapturedTab(null, null);
       chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
       // Give the offscreen document time to release the stream
       await new Promise(r => setTimeout(r, 300));
@@ -1352,8 +1414,7 @@ async function handleStartCapture(tabId, providedStreamId) {
     dbg("[SW] got stream ID:", streamId, providedStreamId ? "(from caller)" : "(fetched in SW)");
 
     // Send stream ID along with current mode so it's applied after capture starts
-    capturedTabId = tabId;
-    capturedTabUrl = tab.url;
+    setCapturedTab(tabId, tab.url);
     openUsage(tab.url, currentMode);
 
     dbg("[SW] sending STREAM_READY, mode:", currentMode);

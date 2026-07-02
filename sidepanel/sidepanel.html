@@ -16,9 +16,8 @@
             <img src="../icons/wordmark.svg" alt="Karafilt" class="wordmark">
           </a>
           <button id="sp-party-btn" class="party-pill" title="Party mode — host a karaoke party">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
-            </svg>
+            <!-- Same 🎉 the website's party pages use — keeps the brand consistent. -->
+            <span class="party-pill-emoji" aria-hidden="true">🎉</span>
             <span>Party</span>
             <span class="party-pill-count" id="sp-party-count" hidden>0</span>
           </button>
@@ -61,6 +60,10 @@
         <span>Wrong song? <span id="alternatives-count">0</span> more matches</span>
         <svg class="alternatives-chevron" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
       </button>
+      <!-- Auto-close countdown: drains over the 5s grace period so the user can
+           see the picker is about to dismiss itself (sidepanel.js toggles
+           .counting on the bar; hover/click cancels it). -->
+      <div class="alternatives-autoclose" aria-hidden="true"><span></span></div>
       <div class="alternatives-list" id="alternatives-list"></div>
     </div>
 
@@ -132,17 +135,18 @@
            the current song + active mode; sidepanel.js shows it only when a
            song is playing and hides it after submit. -->
       <div class="section filter-rating" id="sp-rating" style="display:none">
+        <!-- Label and stars share one row to keep the section short. -->
         <div class="section-header">
-          <label>Rate the filter on this song</label>
+          <label>Rate the filter</label>
+          <div class="rating-stars" id="sp-rating-stars" role="radiogroup" aria-label="Filter quality rating">
+            <button type="button" class="star" data-value="1" aria-label="1 star">★</button>
+            <button type="button" class="star" data-value="2" aria-label="2 stars">★</button>
+            <button type="button" class="star" data-value="3" aria-label="3 stars">★</button>
+            <button type="button" class="star" data-value="4" aria-label="4 stars">★</button>
+            <button type="button" class="star" data-value="5" aria-label="5 stars">★</button>
+          </div>
         </div>
         <div class="community-rating" id="sp-community-rating"></div>
-        <div class="rating-stars" id="sp-rating-stars" role="radiogroup" aria-label="Filter quality rating">
-          <button type="button" class="star" data-value="1" aria-label="1 star">★</button>
-          <button type="button" class="star" data-value="2" aria-label="2 stars">★</button>
-          <button type="button" class="star" data-value="3" aria-label="3 stars">★</button>
-          <button type="button" class="star" data-value="4" aria-label="4 stars">★</button>
-          <button type="button" class="star" data-value="5" aria-label="5 stars">★</button>
-        </div>
         <div class="rating-expand" id="sp-rating-expand" style="display:none">
           <textarea id="sp-rating-comment" class="text-input rating-comment" rows="2" maxlength="2000" placeholder="Optional: what worked or didn't?"></textarea>
           <button id="sp-rating-submit" class="btn-toggle" disabled>Submit rating</button>
