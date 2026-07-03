@@ -77,6 +77,17 @@ Karafilt is free — just create an account at **[karafilt.com](https://karafilt
 
 Your settings (mode, slider position) are saved automatically and persist across sessions.
 
+## Support Karafilt ❤️
+
+Karafilt is free and open source — no ads, no subscriptions, no locked features.
+If it made your karaoke night, consider **[sponsoring on GitHub](https://github.com/sponsors/lemara98)**
+to help cover hosting and development time. Every sponsor gets a shout-out in
+[`SPONSORS.md`](SPONSORS.md).
+
+### 🏆 Headliners
+
+*Your logo here — [become a Headliner](https://github.com/sponsors/lemara98) and get top billing on this README and [karafilt.com](https://karafilt.com).*
+
 ---
 
 ## For Developers
