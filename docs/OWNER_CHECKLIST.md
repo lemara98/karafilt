@@ -48,9 +48,9 @@ Legend: 🔑 secret/env · 🗄️ database · ⚙️ dashboard/config · 🚀 d
 - [ ] 🧪 On production, verify the **sign-in gate** (extension probes `/api/me`),
       **local in-browser filtering**, and **self-serve account deletion** from
       `/account`.
-- [ ] ⚙️ Set up donations: **GitHub Sponsors** (supported for Serbia) and **Ko-fi**;
-      put the links where the code expects them (env/config — Claude will point to the spot).
-- [ ] 🚀 Push both repos to **GitHub** as public; add the donation links to `FUNDING.yml`.
+- [x] ⚙️ Set up donations: **GitHub Sponsors** (supported for Serbia); bank
+      transfer / invoice available on request via the sponsors page.
+- [x] 🚀 Push both repos to **GitHub** as public; sponsors link added to `FUNDING.yml`.
 - [ ] 🧾 **Trademark** check on the name "Karafilt" before heavy branding.
 - [ ] 🚀 Submit the extension to the **Chrome Web Store**: build the zip with
       `scripts/package.sh` (strips the dev-only localhost CSP entries), then use
