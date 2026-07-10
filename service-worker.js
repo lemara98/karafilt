@@ -69,7 +69,10 @@ async function recoverCaptureState() {
     console.warn("[SW] recoverCaptureState failed:", e);
   }
 }
-recoverCaptureState();
+// Party handlers await this before answering: a status request is often the
+// very event that woke an evicted SW, and answering from the not-yet-recovered
+// in-memory state reports "filter off" mid-party (the page trusts real replies).
+const captureStateReady = recoverCaptureState();
 
 // ── Filter usage tracking ───────────────────────────────────────────────────
 // A "listen segment" = one contiguous stretch with the filter active on a single
@@ -1125,35 +1128,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true, version: chrome.runtime.getManifest().version });
       return false;
 
-    case "PARTY_GET_STATUS": {
+    case "PARTY_GET_STATUS":
       // Live filter status for the party page's on-page panel. thisTab tells the
-      // page whether THIS player tab is the one being filtered.
-      const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
-      sendResponse({
-        installed: true,
-        filtering: capturedTabId !== null,
-        thisTab: onThisTab,
-        mode: currentMode,
-        mix: currentMix,
-      });
-      return false;
-    }
+      // page whether THIS player tab is the one being filtered. Await recovery:
+      // this message may be the event that woke an evicted SW, and the fresh
+      // in-memory capturedTabId (null) would lie "filter off" mid-party.
+      (async () => {
+        await captureStateReady;
+        const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+        sendResponse({
+          installed: true,
+          filtering: capturedTabId !== null,
+          thisTab: onThisTab,
+          mode: currentMode,
+          mix: currentMix,
+        });
+      })();
+      return true; // async response
 
-    case "PARTY_SET_MODE": {
+    case "PARTY_SET_MODE":
       // Control the already-running filter from the party page (mode). Guarded so
       // the page can only change the filter on its own tab.
-      const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
-      if (onThisTab && typeof message.value === "string") setFilterMode(message.value);
-      sendResponse({ ok: onThisTab, mode: currentMode });
-      return false;
-    }
+      (async () => {
+        await captureStateReady;
+        const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+        if (onThisTab && typeof message.value === "string") setFilterMode(message.value);
+        sendResponse({ ok: onThisTab, mode: currentMode });
+      })();
+      return true; // async response
 
-    case "PARTY_SET_MIX": {
-      const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
-      if (onThisTab && typeof message.value === "number") setFilterMix(message.value);
-      sendResponse({ ok: onThisTab, mix: currentMix });
-      return false;
-    }
+    case "PARTY_SET_MIX":
+      (async () => {
+        await captureStateReady;
+        const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+        if (onThisTab && typeof message.value === "number") setFilterMix(message.value);
+        sendResponse({ ok: onThisTab, mix: currentMix });
+      })();
+      return true; // async response
 
     case "CREATE_PARTY":
       // Host starts a party. POST /api/party/create with the site session cookie
