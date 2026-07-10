@@ -774,3 +774,21 @@ body { width: 100% !important; }
 #sp-rating-status.err {
   color: #f87171;
 }
+
+/* ── Support link ──────────────────────────────────────────────────────────
+   Quiet footer ask under the settings row; brightens on hover only. */
+.support-row {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.support-row a {
+  font-size: 11px;
+  color: #8b90b0;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.support-row a:hover {
+  color: #c084fc;
+}

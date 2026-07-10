@@ -4,7 +4,10 @@ Karafilt is free, open source, and ad-free — kept on stage by the generous peo
 below. Every sponsorship pays for hosting, party-mode infrastructure, and
 development time.
 
-**[Become a sponsor →](https://github.com/sponsors/lemara98)**
+**[Become a sponsor →](https://github.com/sponsors/lemara98)** · no GitHub
+account? **[Tip a coffee on Ko-fi →](https://ko-fi.com/milanknezevic)** (card or
+PayPal, no account needed) · all options at
+**[karafilt.com/sponsors](https://karafilt.com/sponsors)**
 
 ## 🏆 Headliners
 
