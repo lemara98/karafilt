@@ -8,6 +8,7 @@ let sourceNode = null;
 let mediaStream = null;
 let currentMode = "stft";
 let captureReady = false;
+let capturedTabId = null;
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   dbg("[OFFSCREEN] received message:", message.type, "from:", sender.url || sender.id || "unknown");
@@ -16,10 +17,12 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   switch (message.type) {
     case "STREAM_READY":
       dbg("[OFFSCREEN] STREAM_READY received, mode:", message.mode);
+      capturedTabId = message.tabId != null ? message.tabId : null;
       startCapture(message.streamId, message.mode || "stft");
       break;
     case "START_VIA_DISPLAY_MEDIA":
       dbg("[OFFSCREEN] START_VIA_DISPLAY_MEDIA received, mode:", message.mode);
+      capturedTabId = message.tabId != null ? message.tabId : null;
       startCaptureViaDisplayMedia(message.mode || "stft");
       break;
     case "STOP_CAPTURE":
@@ -84,6 +87,16 @@ async function startCaptureFromMediaStream(stream, initialMode) {
 
   captureReady = true;
   dbg(`[OFFSCREEN] capture started, sample rate: ${audioContext.sampleRate}, mode "${initialMode}"`);
+
+  // Listen-along lyrics aligner: a passive tap on its own branch of the
+  // graph. Failure here must never affect the filter, hence best-effort.
+  if (globalThis.KFAlign) {
+    try {
+      globalThis.KFAlign.attach({ audioContext, sourceNode, tabId: capturedTabId });
+    } catch (err) {
+      console.warn("[OFFSCREEN] alignment attach failed:", err);
+    }
+  }
 
   switchMode(initialMode);
 }
@@ -153,6 +166,9 @@ function switchMode(mode) {
 
 function cleanupAudio() {
   captureReady = false;
+  if (globalThis.KFAlign) {
+    try { globalThis.KFAlign.detach(); } catch (err) {}
+  }
   if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
   if (workletNode) { workletNode.disconnect(); workletNode = null; }
   if (mediaStream) {

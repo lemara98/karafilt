@@ -1389,6 +1389,7 @@ async function handleStartCaptureViaDisplayMedia(tabId) {
     chrome.runtime.sendMessage({
       type: "START_VIA_DISPLAY_MEDIA",
       mode: currentMode,
+      tabId,
     });
     return { success: true };
   } catch (err) {
@@ -1433,6 +1434,7 @@ async function handleStartCapture(tabId, providedStreamId) {
       type: "STREAM_READY",
       streamId: streamId,
       mode: currentMode,
+      tabId,
     });
 
     return { success: true };
