@@ -710,14 +710,14 @@ async function fetchFromLyricsOvh(artist, track) {
 // imports from LRCLib on miss (so querying it also warms it). Base URL is
 // configurable via chrome.storage.local karalyrBase; a dead server fails
 // fast and the chain falls through to LRCLib unchanged.
-let karalyrBase = "https://api.karalyr.com";
+let karalyrBase = "https://www.karalyr.com";
 try {
   chrome.storage.local.get("karalyrBase").then((v) => {
     if (v && typeof v.karalyrBase === "string" && v.karalyrBase) karalyrBase = v.karalyrBase;
   }).catch(() => {});
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.karalyrBase) {
-      karalyrBase = changes.karalyrBase.newValue || "https://api.karalyr.com";
+      karalyrBase = changes.karalyrBase.newValue || "https://www.karalyr.com";
     }
   });
 } catch (e) { /* keep default */ }

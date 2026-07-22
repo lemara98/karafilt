@@ -19,7 +19,11 @@
   const KF_DEBUG = false;
   const dbg = (...args) => { if (KF_DEBUG) console.log("[KF-ALIGN]", ...args); };
 
-  const DEFAULT_BASE = "http://localhost:3000";
+  // Same host as the service worker's karalyrBase; overridable through
+  // chrome.storage.local.karalyrBase for a local server. Unused while the
+  // aligner is disabled, but a stale localhost default would be a trap for
+  // whoever re-enables it.
+  const DEFAULT_BASE = "https://www.karalyr.com";
   const CAPTURE_LATENCY_SEC = 0.03; // tabCapture → worklet, rough constant
   const MIN_CLOCK_PAIRS = 5;
   const MAX_CLOCK_PAIRS = 40;

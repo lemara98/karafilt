@@ -64,6 +64,6 @@
     "128": "icons/icon128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://lrclib.net https://api.lyrics.ovh https://genius.com https://karafilt.com https://www.karafilt.com https://api.karalyr.com http://localhost:3000 http://127.0.0.1:3000"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://lrclib.net https://api.lyrics.ovh https://genius.com https://karafilt.com https://www.karafilt.com https://www.karalyr.com http://localhost:3000 http://127.0.0.1:3000"
   }
 }
