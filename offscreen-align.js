@@ -31,7 +31,29 @@
 
   const core = self.KFAlignCore;
 
-  let enabled = true;
+  // DISABLED — do not flip to `true` without fixing syllableCount first.
+  //
+  // Onset detection itself is language-agnostic (it is signal processing on an
+  // energy envelope), but syllableCount in shared/align-core.js decides how a
+  // line's words are spread across those onsets, and it is English-shaped.
+  // Measured against 29 known words it got 11 wrong, including 4 of 9 Serbian:
+  //
+  //   - its keep-filter [^a-zà-öø-ÿ] strips Latin Extended-A (š č ć ž đ ł ı),
+  //     which merges neighbouring vowel groups: "duša" -> "dua" -> 1 syllable
+  //   - the English silent-e rule fires on every language: "moje", "srce" -> 1
+  //   - ç ñ ð þ sit inside à-ö and so count as vowels (Spanish, Portuguese)
+  //   - Cyrillic strips to empty, so every word scores 1 and the distribution
+  //     collapses to even spacing — the exact thing this feature exists to beat
+  //
+  // Fix: transliterate before stripping (the tables in karalyr's lib/song-key.ts
+  // already cover Cyrillic and đ), drop the diacritic consonants from the vowel
+  // class, and gate the silent-e rule to English. Then re-run that word list as
+  // a test before re-enabling.
+  //
+  // Until then songs are only *marked* for review: see maybeQueueWordSync in
+  // sidepanel.js, which queues them for an admin to approve — no guessed timing
+  // is ever published.
+  let enabled = false;
   let ctx = null;
   let tapNode = null;
   let muteGain = null;
