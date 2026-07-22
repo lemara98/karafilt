@@ -5,6 +5,36 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-07-22
+
+### Added
+- **Spotify support.** Karafilt now works on open.spotify.com. Spotify never
+  attaches its audio element to the page, so a bridge running in the page's own
+  world captures it the moment it's created and relays playback position — the
+  filter and lyrics follow along exactly as they do on YouTube.
+- **Word-by-word lyrics.** Lyrics that carry real word timing now light up one
+  word at a time instead of a line at a time, tracked smoothly against playback.
+  Songs with only line timing keep the previous behaviour, and a
+  "karalyr · word-sync" badge marks the ones with measured timing.
+- **Karalyr as a lyrics source.** Lyrics are looked up in Karalyr — the open
+  karaoke lyrics database — before the existing sources, matched by video id so
+  the right version is found without guessing from the title.
+- **Instrumental countdown.** Gaps longer than five seconds show a filling bar
+  and the seconds remaining, instead of a frozen panel.
+- **Automatic sync requests.** When you listen through a song whose lyrics have
+  no word timing, it's quietly added to Karalyr's request queue so it can be
+  timed for everyone. Requires being signed in; there's no button and nothing
+  about your audio is sent.
+
+### Changed
+- **The party page can start the filter.** Starting a party from karafilt.com no
+  longer always needs the share dialog — when the extension is already allowed on
+  that tab it starts silently.
+- Minimum Chrome version is now 111.
+
+### Fixed
+- Cancelling the screen-share dialog left the panel believing it was capturing.
+
 ## [1.0.0] — 2026-07-02
 
 ### Added
@@ -140,6 +170,8 @@ Initial public release.
 - Smoother, lower-latency audio pipeline (buffered, gapless playback) and
   refined LRCLib search (throttling, deduplication, progressive results).
 
+[1.1.0]: https://github.com/lemara98/karafilt/releases/tag/v1.1.0
+[1.0.0]: https://github.com/lemara98/karafilt/releases/tag/v1.0.0
 [0.5.0]: https://github.com/lemara98/karafilt/releases/tag/v0.5.0
 [0.4.0]: https://github.com/lemara98/karafilt/releases/tag/v0.4.0
 [0.3.0]: https://github.com/lemara98/karafilt/releases/tag/v0.3.0
