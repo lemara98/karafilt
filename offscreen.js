@@ -142,11 +142,16 @@ async function startCaptureViaDisplayMedia(initialMode) {
     });
     if (stream.getAudioTracks().length === 0) {
       console.warn("[OFFSCREEN] getDisplayMedia returned no audio track — user didn't check 'Share audio'");
+      stream.getTracks().forEach((t) => { try { t.stop(); } catch {} });
+      chrome.runtime.sendMessage({ type: "DISPLAY_MEDIA_FAILED" }).catch(() => {});
       return;
     }
     await startCaptureFromMediaStream(stream, initialMode);
   } catch (err) {
+    // Includes the user cancelling the picker — tell the SW so it rolls back
+    // the capture state it set optimistically before showing the dialog.
     console.error("[OFFSCREEN] startCaptureViaDisplayMedia failed:", err && err.message);
+    chrome.runtime.sendMessage({ type: "DISPLAY_MEDIA_FAILED" }).catch(() => {});
   }
 }
 
