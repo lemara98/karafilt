@@ -260,6 +260,35 @@ function runOffline() {
   return { pairOK, trackOK };
 }
 
+// ── Offline: identityCovers (Karalyr search-fallback acceptance) ────────────
+function runIdentityCovers() {
+  console.log(C.b("\n── Offline: identityCovers (Karalyr search fallback) ──\n"));
+  const cases = [
+    // offline-aligned row saved under channel + raw video title → accept
+    [["Grand Production", "Slavica Cukteras - Zvaces je mojim imenom - (Audio 2005)"],
+      { track: "Zvaces je mojim imenom", artist: "Slavica Cukteras" }, true],
+    // well-named row → accept
+    [["Coldplay", "Yellow"], { track: "Yellow", artist: "Coldplay" }, true],
+    // same artist, different song → reject
+    [["Coldplay", "Yellow"], { track: "Fix You", artist: "Coldplay" }, false],
+    // wanted artist's tokens missing from the row (cover / wrong artist) → reject
+    [["Grand Production", "Neko Drugi - Zvaces je mojim imenom"],
+      { track: "Zvaces je mojim imenom", artist: "Slavica Cukteras" }, false],
+    // diacritics on the wanted side still cover the ASCII-stored row → accept
+    [["Grand Production", "Slavica Cukteras - Zvaces je mojim imenom - (Audio 2005)"],
+      { track: "Zvaćeš je mojim imenom", artist: "Slavica Ćukteraš" }, true],
+  ];
+  let ok = 0;
+  for (const [[rowArtist, rowTrack], want, expected] of cases) {
+    const got = SM.identityCovers(rowArtist, rowTrack, want);
+    const pass = got === expected;
+    if (pass) ok++;
+    console.log(`  ${pass ? C.g("✓") : C.r("✗")} {${want.artist} | ${want.track}} vs row {${rowArtist} | ${rowTrack}} → ${got}`);
+  }
+  console.log(`\n  identityCovers: ${C.b(`${ok}/${cases.length}`)}`);
+  return { ok, total: cases.length };
+}
+
 // ── Online hit-rate ─────────────────────────────────────────────────────────
 async function runOnline(resolver, label) {
   console.log(C.b(`\n── Online: ${label} vs live LRCLib ──\n`));
@@ -291,10 +320,12 @@ async function runOnline(resolver, label) {
 
 (async () => {
   const off = runOffline();
+  const cov = runIdentityCovers();
   if (!ONLINE && !BASELINE) {
     console.log(C.dim("\n(run with --online to measure live LRCLib hit-rate, --baseline to compare the old logic)\n"));
     // exit non-zero if offline parsing regressed below a floor
-    process.exit(off.pairOK >= Math.ceil(corpus.length * 0.85) ? 0 : 1);
+    const parseOK = off.pairOK >= Math.ceil(corpus.length * 0.85);
+    process.exit(parseOK && cov.ok === cov.total ? 0 : 1);
   }
   let oldRes, newRes;
   if (BASELINE) oldRes = await runOnline(resolveOld, "OLD algorithm");

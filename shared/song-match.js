@@ -300,10 +300,21 @@
 
     const title = cleanTitle(rawTitle);
 
-    // 2. Spotify "Track · Artist"
-    if (title.includes(" · ")) {
-      const [song, artist] = title.split(" · ");
-      pushExp(artist, song);
+    // 2. Spotify tab titles. Playing: "Track · Artist" — some builds use a
+    //    bullet (•, U+2022) instead of the middot (·, U+00B7). Multi-artist
+    //    lists arrive comma-separated and expandArtists splits them.
+    const dotParts = title.split(/\s+[·•]\s+/);
+    if (dotParts.length >= 2) {
+      const [song, ...rest] = dotParts;
+      pushExp(rest.join(", "), song);
+      return finalize(candidates, title, author);
+    }
+    //    Track page: "Track - song and lyrics by Artist" (the trailing
+    //    "| Spotify" is already stripped by cleanTitle). Checked before the
+    //    dash branch, which would split this into nonsense.
+    const songBy = title.match(/^(.+?)\s*[-–—]\s*song(?: and lyrics)? by (.+)$/i);
+    if (songBy) {
+      pushExp(songBy[2], songBy[1]);
       return finalize(candidates, title, author);
     }
 
@@ -542,6 +553,22 @@
     return tDist + ARTIST_WEIGHT * aDist + dPen - syncedBonus;
   }
 
+  // Karalyr-search fallback acceptance: true when every token of the wanted
+  // track+artist appears somewhere in the row's combined artist+track string.
+  // Catches rows stored under a raw "Artist - Track - (Audio 2005)" video
+  // title with the channel as artist, which fuzzyTrackMatch can never accept.
+  // Only sound against a database that already matched ALL query terms
+  // (Karalyr's FTS) — do NOT use it to accept LRCLib rows.
+  function identityCovers(rowArtist, rowTrack, want) {
+    const blob = " " + normalizeForMatch((rowArtist || "") + " " + (rowTrack || "")) + " ";
+    if (!blob.trim()) return false;
+    const tokens = normalizeForMatch((want.track || "") + " " + (want.artist || ""))
+      .split(" ")
+      .filter(Boolean);
+    if (!tokens.length) return false;
+    return tokens.every((t) => blob.includes(" " + t + " "));
+  }
+
   // rows: array of LRCLib result objects. want: {track, artist, durationSec}.
   // Returns {best, score, synced, alternatives} or null.
   function pickBest(rows, want) {
@@ -583,6 +610,6 @@
     fuzzyTrackMatch, artistMatchStrong,
     cleanTitle, stripArtistFromTrack, expandArtists, dedupCandidates,
     metadataMatchesTitle, parseTitle, extractQuoted, preferGloss, splitColon,
-    buildLrclibRequests, accept, scoreRow, pickBest, durationPenalty,
+    buildLrclibRequests, accept, scoreRow, pickBest, durationPenalty, identityCovers,
   };
 });

@@ -54,6 +54,17 @@
   const SM = (typeof globalThis !== "undefined" && globalThis.KarafiltSongMatch) || self.KarafiltSongMatch;
   const cleanTitle = SM.cleanTitle;
 
+  // --- Per-site adapter (content/site-adapters.js, loaded before us) ---
+  // Non-null only on hosts the generic pipeline can't drive (Spotify: hidden
+  // media element, per-song identity not in the URL). Everywhere else the
+  // adapter is null and nothing below changes behavior.
+  const ADAPTER =
+    (typeof globalThis !== "undefined" &&
+      globalThis.KarafiltSiteAdapter &&
+      globalThis.KarafiltSiteAdapter.forHost(location.hostname)) ||
+    null;
+  if (ADAPTER) ADAPTER.init(); // starts the playback-bridge handshake early
+
   // Walk a script's text content from a marker keyword and return the JSON
   // object that follows the next `{`. Brace-counts so nested objects don't
   // confuse it; respects strings so braces inside values are skipped. Used to
@@ -178,6 +189,9 @@
   // raw title to the shared parser, which produces the ordered candidate
   // {artist, track} pairs. All pure parsing lives in shared/song-match.js.
   function buildSongHint() {
+    // Adapter sites read exact metadata straight from the player DOM
+    // (Spotify's now-playing bar) — no title parsing guesswork needed.
+    if (ADAPTER) return ADAPTER.getSongHint() || {};
     const meta = extractYouTubeMetadata();
     if (!meta) return {};
     return {
@@ -192,9 +206,14 @@
   }
 
   // --- LRC parser ---
+  // Handles plain LRC and Enhanced LRC: `<mm:ss.xx>` word tags (as served by
+  // Karalyr's word-timed revisions) become a per-line `words` array of
+  // {time, text} so the panel can drive the karaoke sweep from measured
+  // timing instead of linear interpolation. Tags are stripped from `text`.
   function parseLRC(lrc) {
     const lines = [];
     const lineRe = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
+    const wordRe = /<(\d+):(\d+(?:\.\d+)?)>/g;
     for (const rawLine of lrc.split(/\r?\n/)) {
       let match;
       const timestamps = [];
@@ -205,9 +224,32 @@
         timestamps.push(minutes * 60 + seconds);
       }
       if (timestamps.length === 0) continue;
-      const text = rawLine.replace(/\[[^\]]*\]/g, "").trim();
+      const rest = rawLine.replace(/\[[^\]]*\]/g, "");
+
+      let words = null;
+      if (wordRe.test(rest)) {
+        words = [];
+        wordRe.lastIndex = 0;
+        let m;
+        let prev = null;
+        const pushWord = (endIdx) => {
+          if (!prev) return;
+          const t = rest.slice(prev.end, endIdx).trim();
+          if (t) words.push({ time: prev.time, text: t });
+        };
+        while ((m = wordRe.exec(rest)) !== null) {
+          pushWord(m.index);
+          prev = { time: parseInt(m[1], 10) * 60 + parseFloat(m[2]), end: wordRe.lastIndex };
+        }
+        pushWord(rest.length);
+        if (words.length === 0) words = null;
+      }
+
+      const text = rest.replace(wordRe, "").replace(/\s+/g, " ").trim();
       if (!text) continue;
-      for (const t of timestamps) lines.push({ time: t, text });
+      for (const t of timestamps) {
+        lines.push(words ? { time: t, text, words } : { time: t, text });
+      }
     }
     lines.sort((a, b) => a.time - b.time);
     return lines;
@@ -215,10 +257,22 @@
 
   // --- Media detection ---
   function findMedia() {
+    // Adapter sites expose playback as a virtual media element (Spotify's
+    // real <audio> never enters the DOM). null until a state source exists.
+    if (ADAPTER) {
+      const vm = ADAPTER.getVirtualMedia();
+      if (vm) return vm;
+    }
     const allMedia = Array.from(document.querySelectorAll("video, audio"));
     if (allMedia.length === 0) return null;
     const playing = allMedia.find((m) => !m.paused && m.currentTime > 0);
     return playing || allMedia[0];
+  }
+
+  // A media reference is still usable if it's the adapter's virtual element
+  // or a DOM element the page hasn't torn down.
+  function isLiveMedia(m) {
+    return !!(m && (m.isVirtual || document.contains(m)));
   }
 
   // --- Extension liveness guard ---
@@ -250,6 +304,9 @@
             lrclibOnly: !!(opts && opts.lrclibOnly),
             forceRefresh: !!(opts && opts.forceRefresh),
             skipLrclib: !!(opts && opts.skipLrclib),
+            // The playing track's exact identity where the tab URL can't
+            // provide it (Spotify) — enables Karalyr's by-id lookup.
+            videoKey: (ADAPTER && ADAPTER.getVideoKey()) || null,
           },
           (res) => {
             if (chrome.runtime.lastError) {
@@ -413,7 +470,7 @@
     }
 
     domScraperIntervalId = setInterval(() => {
-      const video = mediaElement && document.contains(mediaElement) ? mediaElement : findMedia();
+      const video = isLiveMedia(mediaElement) ? mediaElement : findMedia();
       if (!video) return;
       const text = findYouTubeCaptionText();
       if (!text || text === domLastText) return;
@@ -467,6 +524,10 @@
         primary,
         status: currentStatus,
         hasMedia: !!findMedia(),
+        // Per-song identity from the site adapter (null elsewhere) — lets the
+        // side panel key ratings/usage per track on sites whose URL doesn't
+        // change per song (Spotify).
+        videoKey: (ADAPTER && ADAPTER.getVideoKey()) || null,
       },
     });
   }
@@ -480,7 +541,7 @@
   let publishPlaybackCount = 0;
   let publishPlaybackSkipReasons = { noMedia: 0, contextDead: 0, ok: 0 };
   function publishPlaybackTime() {
-    const media = mediaElement && document.contains(mediaElement) ? mediaElement : findMedia();
+    const media = isLiveMedia(mediaElement) ? mediaElement : findMedia();
     mediaElement = media;
     if (!media) {
       publishPlaybackSkipReasons.noMedia++;
@@ -530,7 +591,13 @@
     const forceRefresh = !!(opts && opts.forceRefresh);
     const title = document.title;
     if (!title) return;
-    if (!findMedia()) return;
+    if (!findMedia()) {
+      // Adapter sites can explain WHY there's no media yet (e.g. Spotify's
+      // playback bridge missed the audio element and needs a tab reload).
+      const hint = ADAPTER && ADAPTER.getStatusHint && ADAPTER.getStatusHint();
+      if (hint && hint !== currentStatus) setStatus(hint);
+      return;
+    }
     const normalizedKey = cleanTitle(title);
     if (!normalizedKey) return;
     if (!forceRefresh && normalizedKey === lastFetchedKey) return;
@@ -584,6 +651,9 @@
         source: r.source,
         syncedLyrics: r.syncedLyrics || null,
         plainLyrics: r.plainLyrics || null,
+        // Karalyr already has word timings for this track — the panel's
+        // auto word-sync request uses this to skip submitting it.
+        wordTimed: !!r.wordTimed,
       };
       if (r.syncedLyrics) {
         const lines = parseLRC(r.syncedLyrics);
@@ -666,6 +736,12 @@
   // a moment later. loadGeneration in loadLyricsForCurrentSong prevents a
   // late-arriving stale fetch from clobbering a newer one.
   function getSongKey() {
+    // Adapter sites key by the PLAYING track (Spotify's URL doesn't move per
+    // song); falls through to path+title when nothing is playing yet.
+    if (ADAPTER) {
+      const k = ADAPTER.getSongKey();
+      if (k) return k;
+    }
     return getPathKey() + "|" + cleanTitle(document.title);
   }
 
@@ -692,8 +768,9 @@
     publishState();
 
     // On YouTube, only trigger a fetch on watch pages. Search/home/channel
-    // navigations clear stale state but don't fire a useless lookup.
-    if (!isYouTubeWatchPage()) {
+    // navigations clear stale state but don't fire a useless lookup. Adapter
+    // sites gate the same way on "is a track actually playing".
+    if (!isYouTubeWatchPage() || (ADAPTER && !ADAPTER.shouldFetch())) {
       currentStatus = "";
       publishState();
       return;
@@ -807,7 +884,7 @@
     } else if (message.type === "SYNC_CONTROL") {
       // Popup countdown asks us to pause / play the active media so the
       // capture and the original audio start together at "GO".
-      const m = mediaElement && document.contains(mediaElement) ? mediaElement : findMedia();
+      const m = isLiveMedia(mediaElement) ? mediaElement : findMedia();
       if (!m) return;
       mediaElement = m;
       try {
@@ -828,7 +905,7 @@
       // L so the user sees frames matching the audio they're about to hear.
       // One-shot per AI session; drift may return after the prebuffered
       // chunks play out — toggling AI off/on resets it.
-      const m = mediaElement && document.contains(mediaElement) ? mediaElement : findMedia();
+      const m = isLiveMedia(mediaElement) ? mediaElement : findMedia();
       if (!m) return;
       mediaElement = m;
       const delta = Number(message.deltaSeconds);
@@ -874,6 +951,16 @@
           startPlaybackTicker();
         }
       });
+      if (ADAPTER) {
+        // Adapter sites never attach DOM media, so watchForMedia's observer
+        // can't be the trigger: watch the player widget for song changes and
+        // start the ticker now (it no-ops until playback state arrives).
+        ADAPTER.watchSongChanges(() => maybeRefresh("adapter"));
+        if (showLyrics) {
+          maybeRefresh("init");
+          startPlaybackTicker();
+        }
+      }
     });
   } catch (e) {
     dbg("[KFL-CS] init threw:", e);
