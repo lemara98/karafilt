@@ -98,6 +98,56 @@ header {
 
 .source-badge.visible { display: inline-block; }
 
+/* Karalyr word-synced lyrics: the K built from lyric lines, rows sweeping
+   top-to-bottom like a playhead, with a soft bounce to catch the eye. */
+.source-badge.karalyr {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(
+    135deg,
+    rgba(180, 108, 255, 0.18),
+    rgba(255, 107, 157, 0.18)
+  );
+  border: 1px solid rgba(255, 107, 157, 0.4);
+  color: #ff8fb3;
+  animation: klrBadgeBounce 2.4s ease-in-out infinite;
+}
+.source-badge.karalyr svg {
+  height: 11px;
+  width: 10px;
+  display: block;
+  flex-shrink: 0;
+}
+.source-badge.karalyr rect {
+  animation: klrKSweep 3s ease-in-out infinite;
+}
+.source-badge.karalyr rect:nth-child(3),
+.source-badge.karalyr rect:nth-child(4) { animation-delay: 0.16s; }
+.source-badge.karalyr rect:nth-child(5),
+.source-badge.karalyr rect:nth-child(6) { animation-delay: 0.32s; }
+.source-badge.karalyr rect:nth-child(7) { animation-delay: 0.48s; }
+.source-badge.karalyr rect:nth-child(8),
+.source-badge.karalyr rect:nth-child(9) { animation-delay: 0.64s; }
+.source-badge.karalyr rect:nth-child(10),
+.source-badge.karalyr rect:nth-child(11) { animation-delay: 0.8s; }
+.source-badge.karalyr rect:nth-child(12),
+.source-badge.karalyr rect:nth-child(13) { animation-delay: 0.96s; }
+
+@keyframes klrKSweep {
+  0%, 100% { opacity: 0.42; }
+  12% { opacity: 1; }
+  44% { opacity: 0.42; }
+}
+@keyframes klrBadgeBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .source-badge.karalyr,
+  .source-badge.karalyr rect { animation: none; }
+}
+
 /* ── Header right column: source badge + refresh button + Highlight toggle ── */
 .header-right {
   display: flex;
@@ -159,6 +209,26 @@ header {
   letter-spacing: 0.6px;
 }
 
+/* The auto word-sync label is longer than Sync/Focus — let it wrap. */
+.autosync-label {
+  max-width: 110px;
+  text-align: right;
+  line-height: 1.3;
+}
+
+/* Transient "Word-sync requested ✓" hint next to the source badge. */
+.wordsync-hint {
+  font-size: 10px;
+  color: #4ade80;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.wordsync-hint.visible {
+  opacity: 1;
+}
+
 /* ── Status ── */
 .status {
   font-size: 11px;
@@ -209,6 +279,7 @@ header {
   --lyrics-highlight: #c084fc;
   font-family: var(--lyrics-font-family, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif);
   height: 100%;
+  position: relative; /* anchors absolutely-positioned children (gap bar) */
   overflow-y: auto;
   padding: 50px 0 80px;
   scrollbar-width: thin;
@@ -515,6 +586,59 @@ header {
 @keyframes kf-alts-autoclose {
   from { transform: scaleX(1); }
   to { transform: scaleX(0); }
+}
+
+/* Instrumental-gap loading bar — fills across silences > GAP_MIN_SECONDS
+   (sidepanel.js drives the scaleX per frame; mirrors the autoclose bar
+   pattern above, as a fill instead of a drain). Sits above the bottom fade
+   gradient of .lines-wrap (z-index 2). */
+.lyric-gap {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 14px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s;
+}
+
+.lyric-gap.visible {
+  opacity: 1;
+}
+
+.lyric-gap-note {
+  font-size: 12px;
+  line-height: 1;
+  color: #c084fc;
+}
+
+.lyric-gap-track {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(139, 92, 246, 0.15);
+  overflow: hidden;
+}
+
+.lyric-gap-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transform-origin: left;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+}
+
+/* Focus (karaoke) mode: only 3 centered lines are visible, so float the bar
+   toward the middle where it reads as the current "page". */
+.lines.karaoke-mode ~ .lyric-gap {
+  left: 15%;
+  right: 15%;
+  bottom: 34%;
 }
 
 .alternatives-list {

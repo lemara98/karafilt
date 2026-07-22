@@ -33,6 +33,15 @@ function updateLoaderVisibility() {
 }
 
 let lastCleanedTitle = "";
+// Per-song key reported by the content script's site adapter (e.g. Spotify
+// "sp:<trackId>"). On such sites the tab URL doesn't change per song, so this
+// beats deriveVideoKey(lastKnownUrl) for ratings/usage keying. null elsewhere.
+let lastStateVideoKey = null;
+
+// The key everything per-song (ratings, usage reporting) should use.
+function currentSongVideoKey() {
+  return lastStateVideoKey || deriveVideoKey(lastKnownUrl);
+}
 
 googleSearchBtn.addEventListener("click", () => {
   const q = lastCleanedTitle ? `${lastCleanedTitle} lyrics` : "lyrics";
@@ -49,6 +58,72 @@ let plainLyrics = null;
 let currentLineIndex = -1;
 let activeTabId = null;
 let hasMedia = false;
+
+// --- Instrumental-gap loading bar -----------------------------------------
+// During silences longer than GAP_MIN_SECONDS (the intro before the first
+// line, or breaks between word-timed lines) a progress bar fills across the
+// wait instead of the panel sitting frozen. Line ends are only knowable when
+// word times exist (LRC lines carry start times only), so plain-LRC songs get
+// an intro bar but no mid-song bars.
+const GAP_MIN_SECONDS = 5;
+const GAP_WORD_TAIL_SECONDS = 1.2;
+const gapBarEl = document.getElementById("lyric-gap");
+const gapFillEl = document.getElementById("lyric-gap-fill");
+
+function computeLyricGaps(lines) {
+  const gaps = [];
+  if (!lines || lines.length === 0) return gaps;
+  if (lines[0].time > GAP_MIN_SECONDS) {
+    gaps.push({ start: 0, end: lines[0].time, nextIndex: 0 });
+  }
+  for (let i = 0; i < lines.length - 1; i++) {
+    const words = lines[i].words;
+    if (!words || words.length === 0) continue;
+    const lastTime = words[words.length - 1].time;
+    if (typeof lastTime !== "number") continue;
+    const end = lastTime + GAP_WORD_TAIL_SECONDS;
+    if (lines[i + 1].time - end > GAP_MIN_SECONDS) {
+      gaps.push({ start: end, end: lines[i + 1].time, nextIndex: i + 1 });
+    }
+  }
+  return gaps;
+}
+
+/** In a gap's final second the upcoming line takes the stage early: returns its index, else -1. */
+function stagedLineIndex(t) {
+  for (const g of lyricGaps()) {
+    if (t >= g.end - 1 && t < g.end) return g.nextIndex;
+  }
+  return -1;
+}
+
+// Lazy, identity-cached: parsedLines is reassigned (never mutated in place)
+// wherever lyrics change, so a reference check is enough to invalidate.
+let lyricGapsCache = { source: null, gaps: [] };
+function lyricGaps() {
+  if (lyricGapsCache.source !== parsedLines) {
+    lyricGapsCache = { source: parsedLines, gaps: computeLyricGaps(parsedLines) };
+  }
+  return lyricGapsCache.gaps;
+}
+
+/** Show/advance/hide the bar for time `t` (seconds). Returns true while in a gap. */
+function updateGapBar(t) {
+  if (!gapBarEl || !gapFillEl) return false;
+  let gap = null;
+  for (const g of lyricGaps()) {
+    // Hide 1s before the next line lands so the singer gets a clean view.
+    if (t >= g.start && t < g.end - 1) { gap = g; break; }
+  }
+  if (!gap) {
+    gapBarEl.classList.remove("visible");
+    return false;
+  }
+  const progress = Math.min(1, Math.max(0, (t - gap.start) / (gap.end - gap.start)));
+  gapFillEl.style.transform = `scaleX(${progress})`;
+  gapBarEl.classList.add("visible");
+  return true;
+}
 let lastPlaybackTime = 0;
 let lastRenderedCount = 0;
 let lastRenderedMode = null;  // "synced" | "plain" | null
@@ -100,12 +175,36 @@ function setStatus(text) {
   updateLoaderVisibility();
 }
 
-function setSourceBadge(text) {
+// The Karalyr K mark (13 lyric-line rects on the family 72x80 grid), used in
+// the source badge when word-timed Karalyr lyrics are active. Rows sweep
+// top-to-bottom via CSS (.source-badge.karalyr rect).
+const KARALYR_K_SVG =
+  '<svg viewBox="0 0 72 80" aria-hidden="true">' +
+  '<defs><linearGradient id="klrbg" x1="0" y1="0" x2="1" y2="1">' +
+  '<stop offset="0%" stop-color="#b46cff"/><stop offset="100%" stop-color="#ff6b9d"/>' +
+  "</linearGradient></defs>" +
+  '<g fill="url(#klrbg)">' +
+  [
+    [6, 6, 12], [50, 6, 16], [6, 17, 12], [40, 17, 16], [6, 28, 12], [30, 28, 16],
+    [6, 39, 30], [6, 50, 12], [30, 50, 16], [6, 61, 12], [40, 61, 16], [6, 72, 12], [50, 72, 16],
+  ]
+    .map(([x, y, w]) => `<rect x="${x}" y="${y}" width="${w}" height="8" rx="2"></rect>`)
+    .join("") +
+  "</g></svg>";
+
+function setSourceBadge(text, karalyrWordSync) {
   if (!text) {
-    sourceBadgeEl.classList.remove("visible");
+    sourceBadgeEl.classList.remove("visible", "karalyr");
     sourceBadgeEl.textContent = "";
+    return;
+  }
+  sourceBadgeEl.classList.add("visible");
+  if (karalyrWordSync) {
+    // Word-timed lyrics from the Karalyr library get the distinctive K badge.
+    sourceBadgeEl.classList.add("karalyr");
+    sourceBadgeEl.innerHTML = `${KARALYR_K_SVG}<span>karalyr · word-sync</span>`;
   } else {
-    sourceBadgeEl.classList.add("visible");
+    sourceBadgeEl.classList.remove("karalyr");
     sourceBadgeEl.textContent = text;
   }
 }
@@ -313,9 +412,26 @@ function updateWordHighlight(t) {
   const words = lineEl.querySelectorAll(".word");
   if (words.length === 0) return;
 
-  const lineStart = parsedLines[currentLineIndex].time;
+  const line = parsedLines[currentLineIndex];
+  const lineStart = line.time;
   const next = parsedLines[currentLineIndex + 1];
   const lineEnd = next ? next.time : lineStart + LAST_LINE_TAIL_SECONDS;
+
+  // Measured word timing (Enhanced LRC, e.g. Karalyr word-timed revisions):
+  // drive the sweep from real per-word times. Requires the parsed word list
+  // to match the rendered spans one-to-one; otherwise fall through to the
+  // linear estimate below.
+  if (line.words && line.words.length === words.length) {
+    for (let i = 0; i < words.length; i++) {
+      const start = line.words[i].time;
+      const end = i + 1 < line.words.length ? line.words[i + 1].time : lineEnd;
+      const cls =
+        t >= end ? "word sung" : t >= start ? "word singing" : "word upcoming";
+      if (words[i].className !== cls) words[i].className = cls;
+    }
+    return;
+  }
+
   const span = Math.max(0.001, lineEnd - lineStart);
   const progress = Math.max(0, Math.min(1, (t - lineStart) / span));
   // Boundary word index: the word currently being sung.
@@ -490,6 +606,7 @@ function autoScrollPlainLyrics(t) {
 
 let syncLogCount = 0;
 function syncToPlaybackTime(t) {
+  updateGapBar(t);
   if (parsedLines.length === 0) {
     autoScrollPlainLyrics(t);
     return;
@@ -513,7 +630,13 @@ function syncToPlaybackTime(t) {
       `found=${found}`
     );
   }
-  if (found >= 0) {
+  // Gap ending → show the upcoming line ("get ready": lit, words still dim)
+  // instead of leaving the previous one active until the beat drops.
+  const staged = stagedLineIndex(adjusted);
+  if (staged >= 0) {
+    highlightLine(staged);
+    updateWordHighlight(adjusted);
+  } else if (found >= 0) {
     highlightLine(found);
     updateWordHighlight(adjusted);
   }
@@ -528,6 +651,7 @@ async function getActiveTab() {
 function resetDisplay(statusText) {
   parsedLines = [];
   plainLyrics = null;
+  if (gapBarEl) gapBarEl.classList.remove("visible");
   allMatches = [];
   currentMatchIdx = -1;
   currentLineIndex = -1;
@@ -604,6 +728,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     const state = message.state || {};
     const cleanedTitle = state.cleanedTitle || cleanTitle(state.title || "");
     lastCleanedTitle = cleanedTitle;
+    lastStateVideoKey = state.videoKey || null;
     songTitleEl.textContent = cleanedTitle || "—";
     hasMedia = !!state.hasMedia;
 
@@ -663,7 +788,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     // or a message when nothing is loaded yet.
     if (parsedLines.length > 0 || plainLyrics) {
       setStatus("");
-      setSourceBadge(state.status || "");
+      const karalyrWordSync =
+        !!(incomingPrimary && incomingPrimary.source === "karalyr") &&
+        parsedLines.some((l) => l.words && l.words.length > 0);
+      setSourceBadge(state.status || "", karalyrWordSync);
       setGoogleButtonVisible(false);
     } else {
       setSourceBadge("");
@@ -685,12 +813,44 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     updateRatingWidget();
   } else if (message.type === "PLAYBACK_TIME") {
     lastPlaybackTime = message.time;
+    lastPlaybackWall = performance.now();
+    playbackPaused = !!message.paused;
     if (typeof message.duration === "number") {
       lastPlaybackDuration = message.duration;
     }
     syncToPlaybackTime(message.time);
+    trackListenProgress(message.time, playbackPaused);
+    // Word-timed lines animate between the 200ms playback ticks via an
+    // extrapolated clock, so the word sweep moves smoothly.
+    if (!playbackPaused && wordRafId === null) {
+      wordRafId = requestAnimationFrame(wordRafTick);
+    }
   }
 });
+
+// Frame-level interpolation for measured word timing. Runs only while
+// playing AND the active line actually has word times; otherwise it stops
+// and the next PLAYBACK_TIME tick restarts it if needed.
+let lastPlaybackWall = 0;
+let playbackPaused = true;
+let wordRafId = null;
+function wordRafTick() {
+  wordRafId = null;
+  if (playbackPaused) return;
+  const t = lastPlaybackTime + (performance.now() - lastPlaybackWall) / 1000;
+  const inGap = updateGapBar(t);
+  const line =
+    currentLineIndex >= 0 && currentLineIndex < parsedLines.length
+      ? parsedLines[currentLineIndex]
+      : null;
+  if (line && line.words) {
+    updateWordHighlight(t);
+  } else if (!inGap) {
+    // Nothing animating — stop; the next PLAYBACK_TIME tick restarts us.
+    return;
+  }
+  wordRafId = requestAnimationFrame(wordRafTick);
+}
 
 // --- Tab change handling ---
 // The panel is tab-pinned: Chrome hides it on other tabs and re-shows it when
@@ -730,6 +890,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId !== activeTabId) return;
   if (changeInfo.url && isDifferentPath(lastKnownUrl, changeInfo.url)) {
     lastKnownUrl = changeInfo.url;
+    lastStateVideoKey = null; // navigated away — the adapter key is stale
     // Clear immediately so stale lyrics don't linger
     resetDisplay("Loading...");
     // New song → reset the rating widget (a fresh LYRICS_STATE will re-show it).
@@ -747,6 +908,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   if (!sender.tab) return;
   if (activeTabId != null && sender.tab.id !== activeTabId) return;
   if (message.type === "LYRICS_RESET") {
+    // Song changed: drop the previous song's adapter key so ratings/usage
+    // don't briefly attribute to the old track (the next LYRICS_STATE
+    // carries the new key).
+    lastStateVideoKey = null;
     resetDisplay("Loading...");
   }
 });
@@ -929,10 +1094,16 @@ if (spToggleBtn && window.bindKaraokeControls) {
 const accountChipEl = document.getElementById("sp-account");
 const accountAvatarEl = document.getElementById("sp-account-avatar");
 const accountEmailEl = document.getElementById("sp-account-email");
+// Tracked sign-in state (auto word-sync requests only fire when signed in).
+let accountSignedIn = false;
 
 function refreshAccountStatus() {
   if (!accountChipEl) return;
   chrome.runtime.sendMessage({ type: "GET_ACCOUNT_STATUS" }, (acc) => {
+    accountSignedIn = !chrome.runtime.lastError && !!(acc && acc.signedIn);
+    // A fresh sign-in (ACCOUNT_CHANGED broadcast) re-enables auto word-sync
+    // after an earlier 401 blocked it for the session.
+    if (accountSignedIn) wordSyncAuthBlocked = false;
     if (chrome.runtime.lastError || !acc || acc.disabled) {
       accountChipEl.style.display = "none";
       return;
@@ -1084,7 +1255,7 @@ function loadMyRating(key) {
 // only sees the tab URL — this gives it the title/artist to label segments with.
 // Cheap and idempotent: the SW keys by videoKey and enriches the open segment.
 function reportCurrentSong() {
-  const videoKey = deriveVideoKey(lastKnownUrl);
+  const videoKey = currentSongVideoKey();
   if (!videoKey) return;
   const match = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
   chrome.runtime
@@ -1103,7 +1274,7 @@ function reportCurrentSong() {
 
 function updateRatingWidget() {
   if (!ratingSectionEl) return;
-  const key = hasMedia ? deriveVideoKey(lastKnownUrl) : null;
+  const key = hasMedia ? currentSongVideoKey() : null;
   if (!key) {
     ratingSectionEl.style.display = "none";
     ratingWidgetKey = null;
@@ -1132,7 +1303,7 @@ if (ratingSubmitEl) {
     const match = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
     const modeSel = document.getElementById("sp-mode");
     const payload = {
-      videoKey: deriveVideoKey(lastKnownUrl),
+      videoKey: currentSongVideoKey(),
       videoUrl: lastKnownUrl || null,
       songTitle: lastCleanedTitle || null,
       trackName: (match && match.trackName) || null,
@@ -1248,6 +1419,166 @@ if (ratingSubmitEl) {
     if (res && res.partyRoom && res.partyRoom.code) setActive(res.partyRoom);
   });
 })();
+
+// --- Auto word-sync request ────────────────────────────────────────────────
+// When a signed-in user has actually listened to a chunk of a song whose
+// lyrics were found but carry no word timing yet, silently submit
+// {lyrics + video URL + metadata} to the website (QUEUE_WORD_SYNC → the SW
+// posts /api/sync-queue), which queues it for alignment. Entirely passive:
+// no button, just a small "requested ✓" hint on success.
+const SYNC_QUEUE_CACHE_KEY = "syncQueueSubmitted";
+const SYNC_QUEUE_CACHE_MAX = 500;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// How long a cached outcome suppresses re-submission (checked at read time).
+// Infinity = permanent. Outcomes missing here (upstream, unavailable,
+// queue_full, in_flight) are transient and never cached — retry another day.
+const SYNC_QUEUE_TTL_MS = {
+  already_synced: Infinity,
+  queued: 30 * DAY_MS,
+  already_queued: 30 * DAY_MS,
+  recently_failed: 7 * DAY_MS,
+  bad_lyrics: 7 * DAY_MS,
+  unsupported_source: 7 * DAY_MS,
+  bad_request: 7 * DAY_MS, // deterministic validation reject — don't re-post
+  rate_limited: 1 * DAY_MS,
+};
+const listenSecondsByKey = new Map(); // videoKey → seconds actually listened
+const sessionAttempted = new Set();   // videoKeys already tried this session
+let autoQueueWordSync = true;         // cached settings toggle
+let wordSyncAuthBlocked = false;      // saw a 401 — stop trying this session
+let syncQueueSubmittedCache = null;   // storage mirror; null until loaded
+let lastListenKey = null;             // accumulation cursor: song + last time
+let lastListenTime = 0;
+
+chrome.storage.local.get({ [SYNC_QUEUE_CACHE_KEY]: {} }, (s) => {
+  syncQueueSubmittedCache = s[SYNC_QUEUE_CACHE_KEY] || {};
+});
+
+// Settings toggle — same load/persist pattern as the karaoke (Focus) toggle.
+const autoSyncToggle = document.getElementById("autosync-toggle");
+if (autoSyncToggle) {
+  chrome.storage.local.get({ autoQueueWordSync: true }, ({ autoQueueWordSync: stored }) => {
+    autoSyncToggle.checked = !!stored;
+    autoQueueWordSync = !!stored;
+  });
+  autoSyncToggle.addEventListener("change", () => {
+    chrome.storage.local.set({ autoQueueWordSync: autoSyncToggle.checked });
+    autoQueueWordSync = autoSyncToggle.checked;
+  });
+}
+
+// Called from the PLAYBACK_TIME handler (~5 ticks/s). Accumulates listened
+// time from the reported-time delta — exact during normal playback, and the
+// 2s cap swallows seeks/jumps so skipping around can't fake a full listen.
+function trackListenProgress(t, paused) {
+  const key = currentSongVideoKey();
+  if (!key) return;
+  if (key !== lastListenKey) {
+    lastListenKey = key;
+    lastListenTime = t;
+    return;
+  }
+  const delta = t - lastListenTime;
+  lastListenTime = t;
+  if (paused || delta <= 0) return;
+  const secs = (listenSecondsByKey.get(key) || 0) + Math.min(delta, 2);
+  listenSecondsByKey.set(key, secs);
+  maybeQueueWordSync(key, secs);
+}
+
+function maybeQueueWordSync(key, secs) {
+  // Cheap early-outs, roughly cheapest-first.
+  if (!autoQueueWordSync || wordSyncAuthBlocked || !accountSignedIn) return;
+  // Any source Karalyr can key on. This used to be yt: only, because the
+  // aligner fetched the audio with yt-dlp; it no longer fetches anything, so
+  // Spotify listening should feed the queue too. A request is just demand —
+  // how the audio is eventually obtained is decided per song, later.
+  if (!key.startsWith("yt:") && !key.startsWith("sp:")) return;
+  if (!syncQueueSubmittedCache) return; // storage not loaded yet
+  if (sessionAttempted.has(key)) return;
+  const m = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
+  if (!m || (!m.syncedLyrics && !m.plainLyrics) || m.wordTimed) return;
+  // The queue needs a track identity; some sources (lyrics.ovh) may lack one.
+  if (!m.trackName || !m.artistName) return;
+  // Word timing can also show up as parsed Enhanced-LRC word arrays (same
+  // signal the karalyr badge uses) — nothing to request then either.
+  if (parsedLines.some((l) => l.words && l.words.length > 0)) return;
+  const dur = lastPlaybackDuration;
+  const threshold = dur > 0 ? Math.min(90, Math.max(45, dur * 0.25)) : 60;
+  if (secs < threshold) return;
+  const cached = syncQueueSubmittedCache[key];
+  if (cached && cached.t) {
+    const ttl = SYNC_QUEUE_TTL_MS[cached.r];
+    if (ttl === Infinity || (ttl && Date.now() - cached.t < ttl)) return;
+  }
+  sessionAttempted.add(key);
+  chrome.runtime.sendMessage(
+    {
+      type: "QUEUE_WORD_SYNC",
+      request: {
+        videoKey: key,
+        videoUrl: lastKnownUrl || null,
+        trackName: m.trackName || null,
+        artistName: m.artistName || null,
+        songTitle: lastCleanedTitle || null,
+        duration: dur > 0 ? dur : null,
+        syncedLyrics: m.syncedLyrics || null,
+        plainLyrics: m.plainLyrics || null,
+      },
+    },
+    (res) => {
+      if (chrome.runtime.lastError || !res) return;
+      handleWordSyncResponse(key, res);
+    },
+  );
+}
+
+function handleWordSyncResponse(key, res) {
+  const outcome = res.ok ? "queued" : res.reason || "upstream";
+  if (outcome === "unauthenticated") {
+    // Don't cache — stop trying until the account status says signed-in
+    // again (refreshAccountStatus clears the block). Forget the attempt so
+    // this song retries after the user signs in.
+    wordSyncAuthBlocked = true;
+    sessionAttempted.delete(key);
+    return;
+  }
+  if (res.ok) showWordSyncHint();
+  if (!(outcome in SYNC_QUEUE_TTL_MS)) return; // transient — not cached
+  rememberSyncOutcome(key, outcome);
+}
+
+function rememberSyncOutcome(key, outcome) {
+  if (!syncQueueSubmittedCache) syncQueueSubmittedCache = {};
+  syncQueueSubmittedCache[key] = { t: Date.now(), r: outcome };
+  // Keep only the newest entries so the object can't grow unbounded.
+  const keys = Object.keys(syncQueueSubmittedCache);
+  if (keys.length > SYNC_QUEUE_CACHE_MAX) {
+    keys.sort(
+      (a, b) =>
+        (syncQueueSubmittedCache[a].t || 0) - (syncQueueSubmittedCache[b].t || 0),
+    );
+    for (const k of keys.slice(0, keys.length - SYNC_QUEUE_CACHE_MAX)) {
+      delete syncQueueSubmittedCache[k];
+    }
+  }
+  chrome.storage.local.set({ [SYNC_QUEUE_CACHE_KEY]: syncQueueSubmittedCache });
+}
+
+// Transient "Word-sync requested ✓" hint next to the source badge.
+const wordSyncHintEl = document.getElementById("wordsync-hint");
+let wordSyncHintTimer = null;
+function showWordSyncHint() {
+  if (!wordSyncHintEl) return;
+  wordSyncHintEl.hidden = false;
+  requestAnimationFrame(() => wordSyncHintEl.classList.add("visible"));
+  if (wordSyncHintTimer) clearTimeout(wordSyncHintTimer);
+  wordSyncHintTimer = setTimeout(() => {
+    wordSyncHintTimer = null;
+    wordSyncHintEl.classList.remove("visible");
+    setTimeout(() => { wordSyncHintEl.hidden = true; }, 350);
+  }, 4000);
+}
 
 // --- Init ---
 bindToPinnedTab();

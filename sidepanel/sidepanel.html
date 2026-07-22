@@ -26,6 +26,8 @@
       </div>
       <div class="header-right">
         <div class="header-right-row">
+          <!-- Transient confirmation after an auto word-sync request lands. -->
+          <span class="wordsync-hint" id="wordsync-hint" hidden>Word-sync requested ✓</span>
           <span class="source-badge" id="source-badge"></span>
           <button id="refresh-lyrics" class="refresh-btn" title="Refresh lyrics">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -45,6 +47,13 @@
           <span class="highlight-toggle-label">Focus</span>
           <span class="switch">
             <input type="checkbox" id="karaoke-toggle">
+            <span class="switch-slider"></span>
+          </span>
+        </label>
+        <label class="highlight-toggle-wrap" title="When this song's lyrics have no word timing yet, automatically ask karafilt.com to word-sync them (signed-in only)">
+          <span class="highlight-toggle-label autosync-label">Auto-request word-synced lyrics</span>
+          <span class="switch">
+            <input type="checkbox" id="autosync-toggle" checked>
             <span class="switch-slider"></span>
           </span>
         </label>
@@ -71,6 +80,10 @@
       <div class="lines" id="lines"></div>
       <div class="lyrics-loader" id="lyrics-loader" style="display:none">
         <span></span><span></span><span></span>
+      </div>
+      <div class="lyric-gap" id="lyric-gap">
+        <span class="lyric-gap-note">♪</span>
+        <span class="lyric-gap-track"><span class="lyric-gap-fill" id="lyric-gap-fill"></span></span>
       </div>
     </div>
 

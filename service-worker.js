@@ -11,6 +11,11 @@ const { normalizeForMatch, levenshtein, fuzzyTrackMatch } = SM;
 const KF_DEBUG = false;
 const dbg = (...args) => { if (KF_DEBUG) console.log(...args); };
 
+// Dev hosts the party host-page detection accepts alongside karafilt.com.
+// scripts/package.sh empties this list for production builds (its safety grep
+// forbids any dev-host literal in shipped files).
+const PARTY_DEV_HOSTS = ["localhost", "127.0.0.1"];
+
 let offscreenReady = false;
 let currentMode = "stft";
 let currentMix = 1; // 0..1 fraction, mirrored to the offscreen worklet via SET_MIX
@@ -298,7 +303,7 @@ function toggleCaptureForTab(tab) {
 }
 
 // True for the website party host page (mirrors the party-bridge.js
-// content_scripts matches in manifest.json, including the localhost dev site).
+// content_scripts matches in manifest.json, including the local dev site).
 // There the page has its own UI (lyrics, queue, filter controls), so the
 // filter triggers skip opening the space-consuming side panel and just toggle
 // capture.
@@ -307,7 +312,7 @@ function isPartyHostPage(url) {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, "");
     return (
-      (host === "karafilt.com" || host === "localhost" || host === "127.0.0.1") &&
+      (host === "karafilt.com" || PARTY_DEV_HOSTS.includes(host)) &&
       u.pathname.startsWith("/party/")
     );
   } catch {
@@ -499,8 +504,9 @@ async function handleFetchLyrics(artist, track, tabId, opts) {
   const skipLrclib = !!(opts && opts.skipLrclib);
   const durationSec = (opts && opts.durationSec) || 0;
   const album = (opts && opts.album) || "";
+  const videoKey = (opts && opts.videoKey) || null;
 
-  return fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh, skipLrclib, durationSec, album });
+  return fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh, skipLrclib, durationSec, album, videoKey });
 }
 
 function cacheKey(artist, track) {
@@ -685,6 +691,10 @@ async function fetchFromLyricsOvh(artist, track) {
         found: true,
         syncedLyrics: null,
         plainLyrics: data.lyrics.trim(),
+        // Echo the queried identity — downstream consumers (word-sync queue
+        // submissions) need a track identity on every match.
+        trackName: track,
+        artistName: artist,
         source: "lyrics.ovh",
       };
     }
@@ -692,6 +702,108 @@ async function fetchFromLyricsOvh(artist, track) {
     console.error("[SW] Lyrics.ovh fetch failed:", err);
   }
   return { found: false };
+}
+
+// --- Karalyr (community karaoke DB, LRCLIB-compatible + word timing) ---
+// Tried BEFORE lrclib.net: Karalyr serves community/tap-timed lyrics and
+// word-level auto-aligned revisions that LRCLib doesn't have, and lazily
+// imports from LRCLib on miss (so querying it also warms it). Base URL is
+// configurable via chrome.storage.local karalyrBase; a dead server fails
+// fast and the chain falls through to LRCLib unchanged.
+let karalyrBase = "https://api.karalyr.com";
+try {
+  chrome.storage.local.get("karalyrBase").then((v) => {
+    if (v && typeof v.karalyrBase === "string" && v.karalyrBase) karalyrBase = v.karalyrBase;
+  }).catch(() => {});
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.karalyrBase) {
+      karalyrBase = changes.karalyrBase.newValue || "https://api.karalyr.com";
+    }
+  });
+} catch (e) { /* keep default */ }
+
+async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
+  if (!karalyrBase || !artist || !track) return { found: false };
+
+  const fetchJson = async (path, params) => {
+    const u = new URL(path, karalyrBase);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    try {
+      const res = await fetch(u.toString(), { signal: ctrl.signal });
+      if (!res.ok) return null; // /api/get 404 also triggers Karalyr's lazy LRCLib import
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const tryGet = (a, t, alb, dur) => {
+    const params = { artist_name: a, track_name: t };
+    if (alb) params.album_name = alb;
+    if (dur > 0) params.duration = String(Math.round(dur));
+    return fetchJson("/api/get", params);
+  };
+
+  // Exact /api/get missed for every spelling of this candidate. Karalyr's FTS
+  // search still finds rows whose STORED identity differs from the parsed one
+  // (e.g. an offline-aligned import saved under channel + raw video title).
+  // FTS only returns rows containing every query term, so acceptance is the
+  // usual fuzzy accept OR full token coverage (identityCovers); search rows
+  // carry no lyrics, so the winner is re-fetched by its exact stored identity.
+  const trySearch = async () => {
+    const rows = await fetchJson("/api/search", { q: `${track} ${artist}` });
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const want = { track, artist, durationSec };
+    const usable = rows.filter(
+      (r) =>
+        r && r.karalyr && r.karalyr.has_lyrics &&
+        (SM.accept(r, want) || SM.identityCovers(r.artistName, r.trackName, want))
+    );
+    if (!usable.length) return null;
+    usable.sort((a, b) => SM.scoreRow(a, want) - SM.scoreRow(b, want));
+    const hit = usable[0];
+    return tryGet(hit.artistName, hit.trackName, hit.albumName || "", hit.duration || 0);
+  };
+
+  try {
+    // Exact by-video lookup first: Karalyr stores video→track links for
+    // contributions synced against a specific video (track_videos), so this
+    // hits regardless of how the track's name is stored or parsed. yt: keys
+    // go as youtube_id (understood by older Karalyr servers); sp: keys use
+    // the newer video_key param — an older server just 404s and the chain
+    // falls through to name matching.
+    let row = null;
+    if (videoKey && videoKey.startsWith("yt:")) {
+      row = await fetchJson("/api/get", { youtube_id: videoKey.slice(3) });
+    } else if (videoKey && videoKey.startsWith("sp:")) {
+      row = await fetchJson("/api/get", { video_key: videoKey });
+    }
+    if (!row) row = await tryGet(artist, track, album, durationSec > 0 ? durationSec : 0);
+    if (!row && durationSec > 0) row = await tryGet(artist, track, album, 0);
+    if (!row) row = await trySearch();
+    if (!row || (!row.syncedLyrics && !row.plainLyrics)) return { found: false };
+    dbg(`[SW] Karalyr hit: ${row.artistName} — ${row.trackName} (tier ${row.karalyr && row.karalyr.tier})`);
+    return {
+      found: true,
+      syncedLyrics: row.syncedLyrics || null,
+      plainLyrics: row.plainLyrics || null,
+      trackName: row.trackName,
+      artistName: row.artistName,
+      source: "karalyr",
+      // Word-level timing already exists server-side — the side panel skips
+      // auto word-sync requests for these.
+      wordTimed: !!(row.karalyr && row.karalyr.has_word_timing),
+      // effScore convention elsewhere: lower is better; a synced Karalyr hit
+      // should win against same-candidate alternatives.
+      matchScore: row.syncedLyrics ? -10 : 40,
+      matchSynced: !!row.syncedLyrics,
+      alternatives: [],
+    };
+  } catch (err) {
+    return { found: false };
+  }
 }
 
 async function fetchFromLRCLib(artist, track, opts) {
@@ -703,6 +815,7 @@ async function fetchFromLRCLib(artist, track, opts) {
   const skipLrclib = !!(opts && opts.skipLrclib);
   const album = (opts && opts.album) || "";
   const durationSec = (opts && opts.durationSec) || 0;
+  const videoKey = (opts && opts.videoKey) || null;
   const key = cacheKey(artist, track);
   if (!forceRefresh && lyricsCache.has(key)) return lyricsCache.get(key);
 
@@ -711,8 +824,14 @@ async function fetchFromLRCLib(artist, track, opts) {
   if (lrclibOnly && skipLrclib) return result;
 
   const t0 = performance.now();
-  let lrclibMs = 0;
+  // Karalyr first (community + word-timed lyrics). skipLrclib means phase 2
+  // of the content-script loop — Karalyr was already tried in phase 1.
   if (!skipLrclib) {
+    result = await fetchFromKaralyr(artist, track, album, durationSec, videoKey);
+  }
+
+  let lrclibMs = 0;
+  if (!skipLrclib && !result.found) {
    try {
     // Build the full request set for this candidate: /api/get (with + without
     // duration), structured /api/search?track_name&artist_name, free-text
@@ -838,6 +957,10 @@ function setFilterMode(value) {
   chrome.runtime.sendMessage({ type: "SET_MODE", value });
 }
 
+// videoKeys with a QUEUE_WORD_SYNC submission currently in flight, so a
+// panel that fires twice (e.g. reopened mid-song) can't double-post.
+const wordSyncInFlight = new Set();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Messages from the offscreen document. (AI status/lag/seek are gone now that
   // all processing runs in-browser in the worklet.)
@@ -916,6 +1039,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         skipLrclib: !!message.skipLrclib,
         durationSec: message.durationSec || 0,
         album: message.album || "",
+        // The playing song's exact identity: the content script's site
+        // adapter supplies it where the tab URL can't (Spotify's URL doesn't
+        // change per song); otherwise derive from the sender's tab URL.
+        // Karalyr resolves lyrics by this key ahead of any name matching.
+        videoKey:
+          (typeof message.videoKey === "string" && message.videoKey) ||
+          (sender.tab && sender.tab.url ? deriveVideoKey(sender.tab.url) : null),
       }).then(sendResponse);
       return true; // async response
     }
@@ -1027,6 +1157,69 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: res.ok, status: res.status });
         } catch {
           sendResponse({ ok: false, error: "network" });
+        }
+      })();
+      return true; // async response
+
+    case "QUEUE_WORD_SYNC":
+      // Submit {lyrics + video URL + metadata} to the website's alignment
+      // queue. Same cookie-carrying fetch as SUBMIT_FILTER_RATING; the site
+      // answers 201 {ok:true} when queued, or a reason code otherwise.
+      (async () => {
+        const req = message.request || {};
+        const videoKey = typeof req.videoKey === "string" ? req.videoKey : null;
+        if (!videoKey) {
+          sendResponse({ ok: false, reason: "upstream" });
+          return;
+        }
+        if (wordSyncInFlight.has(videoKey)) {
+          sendResponse({ ok: false, reason: "in_flight" });
+          return;
+        }
+        wordSyncInFlight.add(videoKey);
+        try {
+          const { websiteUrl } = await chrome.storage.local.get({
+            websiteUrl: "https://karafilt.com",
+          });
+          const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+          if (!base) {
+            sendResponse({ ok: false, reason: "unavailable" });
+            return;
+          }
+          const res = await fetchWithTimeout(
+            `${base}/api/sync-queue`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({
+                ...req,
+                extensionVersion: chrome.runtime.getManifest().version,
+              }),
+            },
+            8000,
+          );
+          if (res.status === 201) {
+            sendResponse({ ok: true, status: "queued" });
+          } else if (res.status === 401) {
+            sendResponse({ ok: false, reason: "unauthenticated" });
+          } else {
+            let reason = "upstream";
+            try {
+              const data = await res.json();
+              if (data && typeof data.reason === "string" && data.reason) {
+                reason = data.reason;
+              }
+            } catch { /* unparseable body — keep "upstream" */ }
+            sendResponse({ ok: false, reason });
+          }
+        } catch {
+          sendResponse({ ok: false, reason: "upstream" });
+        } finally {
+          wordSyncInFlight.delete(videoKey);
         }
       })();
       return true; // async response
@@ -1165,6 +1358,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: onThisTab, mix: currentMix });
       })();
       return true; // async response
+
+    case "PARTY_START_FILTER":
+      // Start the filter on the party page's own tab, from its on-page button.
+      // A page click is not an extension invocation, so getMediaStreamId only
+      // succeeds when the user has invoked the extension on this tab before
+      // (shortcut / context menu / side panel); when it throws we fall back to
+      // the getDisplayMedia picker — the same path Brave side-panel clicks use.
+      // The picker path replies ok BEFORE the user finishes the dialog; a
+      // cancel rolls the state back via DISPLAY_MEDIA_FAILED below.
+      (async () => {
+        await captureStateReady;
+        const tabId = sender.tab && sender.tab.id;
+        if (!tabId) {
+          sendResponse({ ok: false, error: "no_tab" });
+          return;
+        }
+        if (capturedTabId === tabId) {
+          sendResponse({ ok: true, already: true });
+          return;
+        }
+        let started = false;
+        try {
+          const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+          const result = await handleStartCapture(tabId, streamId);
+          started = !!(result && result.success);
+          if (started) sendResponse({ ok: true, via: "tabCapture" });
+        } catch (err) {
+          dbg("[SW] PARTY_START_FILTER: tabCapture path unavailable:", err && err.message);
+        }
+        if (!started) {
+          const result = await handleStartCaptureViaDisplayMedia(tabId);
+          started = !!(result && result.success);
+          sendResponse({ ok: started, via: "displayMedia" });
+        }
+        if (started) {
+          chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: true }).catch(() => {});
+        }
+      })();
+      return true; // async response
+
+    case "PARTY_STOP_FILTER":
+      // Stop the filter from the party page's status badge. Unlike starting,
+      // stopping needs no gesture/invocation — mirrors the "already capturing"
+      // branch of toggleCaptureForTab, guarded to the page's own tab.
+      (async () => {
+        await captureStateReady;
+        const onThisTab = !!(sender.tab && sender.tab.id === capturedTabId);
+        if (onThisTab) {
+          flushUsage(Date.now());
+          setCapturedTab(null, null);
+          chrome.runtime.sendMessage({ type: "STOP_CAPTURE" }).catch(() => {});
+          chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
+        }
+        sendResponse({ ok: onThisTab });
+      })();
+      return true; // async response
+
+    case "DISPLAY_MEDIA_FAILED":
+      // The offscreen document's getDisplayMedia was cancelled (or returned no
+      // audio track) — roll back the capture state that
+      // handleStartCaptureViaDisplayMedia set optimistically, so status stops
+      // claiming the filter is on.
+      flushUsage(Date.now());
+      setCapturedTab(null, null);
+      chrome.runtime.sendMessage({ type: "CAPTURE_STATE", isActive: false }).catch(() => {});
+      return false;
 
     case "CREATE_PARTY":
       // Host starts a party. POST /api/party/create with the site session cookie

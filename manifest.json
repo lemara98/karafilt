@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Karafilt",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "minimum_chrome_version": "111",
   "description": "Real-time vocal removal for karaoke — removes vocals from any tab audio",
   "permissions": ["tabCapture", "offscreen", "activeTab", "tabs", "storage", "sidePanel", "scripting", "contextMenus", "alarms"],
   "host_permissions": ["<all_urls>"],
@@ -11,8 +12,15 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["shared/song-match.js", "content/lyrics-overlay.js"],
+      "js": ["shared/song-match.js", "content/site-adapters.js", "content/lyrics-overlay.js"],
       "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["content/spotify-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
       "all_frames": false
     },
     {
@@ -56,6 +64,6 @@
     "128": "icons/icon128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://lrclib.net https://api.lyrics.ovh https://genius.com https://karafilt.com https://www.karafilt.com http://localhost:3000 http://127.0.0.1:3000"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://lrclib.net https://api.lyrics.ovh https://genius.com https://karafilt.com https://www.karafilt.com https://api.karalyr.com http://localhost:3000 http://127.0.0.1:3000"
   }
 }
