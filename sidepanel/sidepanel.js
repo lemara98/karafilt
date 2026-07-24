@@ -811,6 +811,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
     // Show/refresh the per-song rating widget for the current song.
     updateRatingWidget();
+
+    // Song identified and lyrics resolved — request a word-sync right away
+    // if Karalyr had nothing (all the guards live inside).
+    maybeQueueWordSync(currentSongVideoKey());
   } else if (message.type === "PLAYBACK_TIME") {
     lastPlaybackTime = message.time;
     lastPlaybackWall = performance.now();
@@ -819,7 +823,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       lastPlaybackDuration = message.duration;
     }
     syncToPlaybackTime(message.time);
-    trackListenProgress(message.time, playbackPaused);
+    // Belt-and-braces for sign-in after lyrics loaded or a late storage
+    // cache: all guards are cheap early-outs at ~5 ticks/s.
+    maybeQueueWordSync(currentSongVideoKey());
     // Word-timed lines animate between the 200ms playback ticks via an
     // extrapolated clock, so the word sweep moves smoothly.
     if (!playbackPaused && wordRafId === null) {
@@ -1442,53 +1448,24 @@ const SYNC_QUEUE_TTL_MS = {
   bad_request: 7 * DAY_MS, // deterministic validation reject — don't re-post
   rate_limited: 1 * DAY_MS,
 };
-const listenSecondsByKey = new Map(); // videoKey → seconds actually listened
 const sessionAttempted = new Set();   // videoKeys already tried this session
-let autoQueueWordSync = true;         // cached settings toggle
 let wordSyncAuthBlocked = false;      // saw a 401 — stop trying this session
 let syncQueueSubmittedCache = null;   // storage mirror; null until loaded
-let lastListenKey = null;             // accumulation cursor: song + last time
-let lastListenTime = 0;
 
 chrome.storage.local.get({ [SYNC_QUEUE_CACHE_KEY]: {} }, (s) => {
   syncQueueSubmittedCache = s[SYNC_QUEUE_CACHE_KEY] || {};
 });
+// The old opt-out toggle is gone — requests are always on (signed-in only).
+chrome.storage.local.remove("autoQueueWordSync");
 
-// Settings toggle — same load/persist pattern as the karaoke (Focus) toggle.
-const autoSyncToggle = document.getElementById("autosync-toggle");
-if (autoSyncToggle) {
-  chrome.storage.local.get({ autoQueueWordSync: true }, ({ autoQueueWordSync: stored }) => {
-    autoSyncToggle.checked = !!stored;
-    autoQueueWordSync = !!stored;
-  });
-  autoSyncToggle.addEventListener("change", () => {
-    chrome.storage.local.set({ autoQueueWordSync: autoSyncToggle.checked });
-    autoQueueWordSync = autoSyncToggle.checked;
-  });
-}
-
-// Called from the PLAYBACK_TIME handler (~5 ticks/s). Accumulates listened
-// time from the reported-time delta — exact during normal playback, and the
-// 2s cap swallows seeks/jumps so skipping around can't fake a full listen.
-function trackListenProgress(t, paused) {
-  const key = currentSongVideoKey();
-  if (!key) return;
-  if (key !== lastListenKey) {
-    lastListenKey = key;
-    lastListenTime = t;
-    return;
-  }
-  const delta = t - lastListenTime;
-  lastListenTime = t;
-  if (paused || delta <= 0) return;
-  const secs = (listenSecondsByKey.get(key) || 0) + Math.min(delta, 2);
-  listenSecondsByKey.set(key, secs);
-  maybeQueueWordSync(key, secs);
-}
-
-function maybeQueueWordSync(key, secs) {
+// Requests fire as soon as a song is identified with fallback lyrics and no
+// word-synced version on Karalyr. The Karalyr-first lookup (by video key,
+// then names) is the "already in the database" check, and the server dedupes
+// by song identity — a second request for a live want becomes a vote.
+function maybeQueueWordSync(key) {
   // Cheap early-outs, roughly cheapest-first.
-  if (!autoQueueWordSync || wordSyncAuthBlocked || !accountSignedIn) return;
+  if (!key) return;
+  if (wordSyncAuthBlocked || !accountSignedIn) return;
   // Any source Karalyr can key on. This used to be yt: only, because the
   // aligner fetched the audio with yt-dlp; it no longer fetches anything, so
   // Spotify listening should feed the queue too. A request is just demand —
@@ -1503,9 +1480,11 @@ function maybeQueueWordSync(key, secs) {
   // Word timing can also show up as parsed Enhanced-LRC word arrays (same
   // signal the karalyr badge uses) — nothing to request then either.
   if (parsedLines.some((l) => l.words && l.words.length > 0)) return;
+  // The queue rejects lyrics under 4 lines — don't burn the daily budget on a
+  // request that is guaranteed to bounce.
+  const lyr = m.syncedLyrics || m.plainLyrics || "";
+  if (lyr.split("\n").filter((l) => l.trim()).length < 4) return;
   const dur = lastPlaybackDuration;
-  const threshold = dur > 0 ? Math.min(90, Math.max(45, dur * 0.25)) : 60;
-  if (secs < threshold) return;
   const cached = syncQueueSubmittedCache[key];
   if (cached && cached.t) {
     const ttl = SYNC_QUEUE_TTL_MS[cached.r];
