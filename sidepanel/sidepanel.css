@@ -581,57 +581,54 @@ header {
   to { transform: scaleX(0); }
 }
 
-/* Instrumental-gap loading bar — fills across silences > GAP_MIN_SECONDS
-   (sidepanel.js drives the scaleX per frame; mirrors the autoclose bar
-   pattern above, as a fill instead of a drain). Sits above the bottom fade
-   gradient of .lines-wrap (z-index 2). */
+/* Instrumental count-in — same design as Karalyr's LyricsPlayer: during
+   silences > GAP_MIN_SECONDS the lyrics dim and a centered overlay shows a
+   filling pill plus the seconds left until the next line. Opacity and fill
+   width are clock-driven per frame from sidepanel.js — no CSS transitions
+   here, they'd retarget every frame and stutter. */
 .lyric-gap {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 14px;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 3;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  padding: 0 34px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.35s;
-}
-
-.lyric-gap.visible {
-  opacity: 1;
-}
-
-.lyric-gap-note {
-  font-size: 12px;
-  line-height: 1;
-  color: #c084fc;
 }
 
 .lyric-gap-track {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(139, 92, 246, 0.15);
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  position: relative;
   overflow: hidden;
 }
 
 .lyric-gap-fill {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  transform-origin: left;
-  transform: scaleX(0);
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 999px;
   background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  box-shadow: 0 0 22px rgba(139, 92, 246, 0.55);
 }
 
-/* Focus (karaoke) mode: only 3 centered lines are visible, so float the bar
-   toward the middle where it reads as the current "page". */
-.lines.karaoke-mode ~ .lyric-gap {
-  left: 15%;
-  right: 15%;
-  bottom: 34%;
+.lyric-gap-num {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: #ffffff;
+  text-shadow: 0 0 20px rgba(139, 92, 246, 0.6);
 }
 
 .alternatives-list {

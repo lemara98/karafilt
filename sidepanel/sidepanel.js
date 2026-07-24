@@ -69,6 +69,7 @@ const GAP_MIN_SECONDS = 5;
 const GAP_WORD_TAIL_SECONDS = 1.2;
 const gapBarEl = document.getElementById("lyric-gap");
 const gapFillEl = document.getElementById("lyric-gap-fill");
+const gapNumEl = document.getElementById("lyric-gap-num");
 
 function computeLyricGaps(lines) {
   const gaps = [];
@@ -107,21 +108,33 @@ function lyricGaps() {
   return lyricGapsCache.gaps;
 }
 
-/** Show/advance/hide the bar for time `t` (seconds). Returns true while in a gap. */
+/** Show/advance/hide the count-in for time `t` (seconds). Returns true while
+ * the overlay is up. Karalyr LyricsPlayer parity: the bar FILLS toward the
+ * downbeat while the number counts the seconds left; fade-in over 0.45s,
+ * smoothstep fade-out between 2s and 1s remaining — fully gone at 1s, when
+ * the upcoming line takes the stage (stagedLineIndex). The lyrics behind dim
+ * on the same clock. All values are set per update; CSS transitions would
+ * retarget every frame and stutter. */
 function updateGapBar(t) {
   if (!gapBarEl || !gapFillEl) return false;
   let gap = null;
   for (const g of lyricGaps()) {
-    // Hide 1s before the next line lands so the singer gets a clean view.
     if (t >= g.start && t < g.end - 1) { gap = g; break; }
   }
   if (!gap) {
-    gapBarEl.classList.remove("visible");
+    gapBarEl.style.opacity = "0";
+    if (linesEl) linesEl.style.opacity = "";
     return false;
   }
+  const entry = Math.min(1, (t - gap.start) / 0.45);
+  const linear = Math.min(1, Math.max(0, (gap.end - t - 1) / 1));
+  const exit = linear * linear * (3 - 2 * linear); // smoothstep — gentle ends
+  const opacity = Math.min(entry, exit);
   const progress = Math.min(1, Math.max(0, (t - gap.start) / (gap.end - gap.start)));
-  gapFillEl.style.transform = `scaleX(${progress})`;
-  gapBarEl.classList.add("visible");
+  gapFillEl.style.width = `${progress * 100}%`;
+  if (gapNumEl) gapNumEl.textContent = String(Math.max(1, Math.ceil(gap.end - t)));
+  gapBarEl.style.opacity = String(opacity);
+  if (linesEl) linesEl.style.opacity = String(1 - 0.78 * opacity);
   return true;
 }
 let lastPlaybackTime = 0;
@@ -651,7 +664,8 @@ async function getActiveTab() {
 function resetDisplay(statusText) {
   parsedLines = [];
   plainLyrics = null;
-  if (gapBarEl) gapBarEl.classList.remove("visible");
+  if (gapBarEl) gapBarEl.style.opacity = "0";
+  if (linesEl) linesEl.style.opacity = "";
   allMatches = [];
   currentMatchIdx = -1;
   currentLineIndex = -1;

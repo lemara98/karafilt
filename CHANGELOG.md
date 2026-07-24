@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.1] — 2026-07-24
 
+### Added
+- **A real count-in.** The thin loading strip that filled across intros and
+  instrumental breaks is now the same count-in as on karalyr.com: the lyrics
+  dim, a centered bar fills toward the downbeat, and a big number counts the
+  seconds until the next line — in Karafilt's own colors.
+
 ### Changed
 - **Sync requests fire immediately.** A song whose lyrics have no word timing
   is added to Karalyr's request queue as soon as it's identified and lyrics
