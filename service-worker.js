@@ -705,11 +705,10 @@ async function fetchFromLyricsOvh(artist, track) {
 }
 
 // --- Karalyr (community karaoke DB, LRCLIB-compatible + word timing) ---
-// Tried BEFORE lrclib.net: Karalyr serves community/tap-timed lyrics and
-// word-level auto-aligned revisions that LRCLib doesn't have, and lazily
-// imports from LRCLib on miss (so querying it also warms it). Base URL is
-// configurable via chrome.storage.local karalyrBase; a dead server fails
-// fast and the chain falls through to LRCLib unchanged.
+// Tried BEFORE lrclib.net: Karalyr serves only word-synced karaoke lyrics —
+// exactly what LRCLib doesn't have. A miss is a plain 404 and the chain
+// falls through to LRCLib and the other sources. Base URL is configurable
+// via chrome.storage.local karalyrBase; a dead server fails fast.
 let karalyrBase = "https://www.karalyr.com";
 try {
   chrome.storage.local.get("karalyrBase").then((v) => {
@@ -732,7 +731,7 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
     const timer = setTimeout(() => ctrl.abort(), 1500);
     try {
       const res = await fetch(u.toString(), { signal: ctrl.signal });
-      if (!res.ok) return null; // /api/get 404 also triggers Karalyr's lazy LRCLib import
+      if (!res.ok) return null;
       return await res.json();
     } finally {
       clearTimeout(timer);
