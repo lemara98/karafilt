@@ -5,6 +5,23 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-07-24
+
+### Changed
+- **Sync requests fire immediately.** A song whose lyrics have no word timing
+  is added to Karalyr's request queue as soon as it's identified and lyrics
+  are found — no more waiting through 45–90 seconds of listening. Karalyr is
+  checked first (by video id, then by name), so nothing already word-synced is
+  ever re-requested; duplicates of an existing request become votes.
+
+### Removed
+- **The "Auto-request word-synced lyrics" toggle.** Requests are now always on
+  while signed in. As before, only song metadata and the lyrics text are sent —
+  nothing about your audio.
+- **Dormant listen-along aligner files.** The experimental in-browser aligner
+  (never enabled, never shipped in the store build) is gone along with the
+  Karalyr endpoint it targeted; word timing comes from the sync queue instead.
+
 ## [1.1.0] — 2026-07-22
 
 ### Added
