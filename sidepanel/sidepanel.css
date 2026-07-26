@@ -893,7 +893,17 @@ body { width: 100% !important; }
    Quiet footer ask under the settings row; brightens on hover only. */
 .support-row {
   margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   text-align: center;
+}
+
+.support-sep {
+  font-size: 11px;
+  color: #4a4d63;
 }
 
 .support-row a {
