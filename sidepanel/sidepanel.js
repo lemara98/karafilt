@@ -153,6 +153,11 @@ let lastPlaybackDuration = 0;
 // match currently rendered in parsedLines/plainLyrics.
 let allMatches = [];
 let currentMatchIdx = -1;
+// The song key allMatches was resolved for. Anything keyed on the *current*
+// song (a word-sync request carries both the lyrics and the song's identity)
+// must check this first: the tab can move to the next track before the old
+// song's lyrics state drains, and the two must never be mixed.
+let matchesVideoKey = null;
 // Auto-open bookkeeping for the matches picker: the dropdown opens by itself
 // once per distinct match list, then closes again after 5s of no interaction
 // (keeping the already-rendered default match). altsAutoOpenKey remembers the
@@ -369,6 +374,7 @@ if (refreshBtn) {
       plainLyrics = null;
       allMatches = [];
       currentMatchIdx = -1;
+      matchesVideoKey = null;
       currentLineIndex = -1;
       lastPlaybackTime = 0;
       aiLagSeconds = 0;
@@ -668,6 +674,7 @@ function resetDisplay(statusText) {
   if (linesEl) linesEl.style.opacity = "";
   allMatches = [];
   currentMatchIdx = -1;
+  matchesVideoKey = null;
   currentLineIndex = -1;
   hasMedia = false;
   lastPlaybackTime = 0;
@@ -761,6 +768,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       allMatches = incomingAlts;
       currentMatchIdx = -1;
     }
+    // Stamp the list with the song it describes (lastStateVideoKey was just
+    // refreshed from this very message), so a later tick can tell whether it
+    // still belongs to what the tab is playing.
+    matchesVideoKey = currentSongVideoKey();
     renderMatchesPicker();
 
     // Detect whether the new state is a superset of the old (just appended lines).
@@ -1476,6 +1487,20 @@ chrome.storage.local.remove("autoQueueWordSync");
 // word-synced version on Karalyr. The Karalyr-first lookup (by video key,
 // then names) is the "already in the database" check, and the server dedupes
 // by song identity — a second request for a live want becomes a vote.
+/**
+ * The link to send with a word-sync request. The server derives the song's
+ * video from this URL and ignores the key sent beside it, so it has to point
+ * at `key` and nothing else — the tab URL is only right when it agrees.
+ * On Spotify it usually doesn't: open.spotify.com shows what is being browsed
+ * while the adapter reports what is playing (see shared/video-key.js).
+ */
+function urlForSongKey(key, tabUrl) {
+  if (tabUrl && deriveVideoKey(tabUrl) === key) return tabUrl;
+  if (key.startsWith("yt:")) return "https://www.youtube.com/watch?v=" + key.slice(3);
+  if (key.startsWith("sp:")) return "https://open.spotify.com/track/" + key.slice(3);
+  return null;
+}
+
 function maybeQueueWordSync(key) {
   // Cheap early-outs, roughly cheapest-first.
   if (!key) return;
@@ -1487,6 +1512,12 @@ function maybeQueueWordSync(key) {
   if (!key.startsWith("yt:") && !key.startsWith("sp:")) return;
   if (!syncQueueSubmittedCache) return; // storage not loaded yet
   if (sessionAttempted.has(key)) return;
+  // Only request for the song these lyrics were actually resolved for. Inside
+  // a YouTube mix the tab advances to the next track while the previous
+  // song's LYRICS_STATE is still in flight, and a tick landing in that window
+  // pairs one song's lyrics with the other's identity. Skipping it costs
+  // nothing — the next tick, after the new state arrives, is consistent.
+  if (matchesVideoKey !== key) return;
   const m = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
   if (!m || (!m.syncedLyrics && !m.plainLyrics) || m.wordTimed) return;
   // The queue needs a track identity; some sources (lyrics.ovh) may lack one.
@@ -1510,7 +1541,7 @@ function maybeQueueWordSync(key) {
       type: "QUEUE_WORD_SYNC",
       request: {
         videoKey: key,
-        videoUrl: lastKnownUrl || null,
+        videoUrl: urlForSongKey(key, lastKnownUrl),
         trackName: m.trackName || null,
         artistName: m.artistName || null,
         songTitle: lastCleanedTitle || null,
