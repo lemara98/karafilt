@@ -1304,6 +1304,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({
               ok: true,
               rating: data.rating ?? null,
+              liked: typeof data.liked === "boolean" ? data.liked : null,
               comment: data.comment ?? null,
             });
           } else {

@@ -818,52 +818,39 @@ body { width: 100% !important; }
   margin-top: 4px;
 }
 
-.community-rating .cr-stars {
-  color: #fbbf24;
-  letter-spacing: 1px;
-}
-
-.community-rating .cr-count {
-  color: #8b90b0;
-}
-
 .community-rating.cr-empty {
   color: #8b90b0;
 }
 
-/* Stars sit inline with the section label (see sidepanel.html) — sized down
-   so the whole rating header stays a single compact row. */
+/* Vote buttons sit inline with the section label (see sidepanel.html) — sized
+   down so the whole rating header stays a single compact row. */
 .filter-rating .rating-stars {
   display: flex;
   gap: 2px;
 }
 
-.filter-rating .star {
+.filter-rating .vote {
   background: none;
   border: none;
   padding: 1px;
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  color: #3a3e5a;
-  transition: color 0.15s, transform 0.1s;
+  /* Emoji glyphs ignore `color` — dim the unchosen state by desaturating. */
+  filter: grayscale(1) opacity(0.45);
+  transition: filter 0.15s, transform 0.1s;
 }
 
-.filter-rating .star:hover {
+.filter-rating .vote:hover,
+.filter-rating .vote:focus-visible {
   transform: scale(1.12);
+  /* Preview the full-color selected look before committing. */
+  filter: none;
 }
 
-/* Light up the hovered star and all before it (CSS-only preview). */
-.filter-rating .rating-stars:hover .star {
-  color: #fbbf24;
-}
-.filter-rating .rating-stars .star:hover ~ .star {
-  color: #3a3e5a;
-}
-
-/* Committed selection (set by JS via .selected on stars up to the rating). */
-.filter-rating .star.selected {
-  color: #fbbf24;
+/* Committed selection (set by JS via .selected on the chosen vote). */
+.filter-rating .vote.selected {
+  filter: none;
 }
 
 .filter-rating .rating-comment {

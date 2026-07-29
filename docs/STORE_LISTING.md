@@ -95,6 +95,9 @@ produced for upload.
 > • Pick the right match when a song has multiple versions
 > • Vocal/instrumental mix slider — keep a hint of the original vocal as a guide
 > • Works on any site that plays audio
+> • Vote 👍/👎 on how well the filter worked on each song — YouTube thumbnails
+>   show the community's like share, so you can spot karaoke-friendly videos
+>   before opening them
 > • Party Mode — host a karaoke party: friends scan a QR, add YouTube songs to a
 >   shared queue from their phones, and everyone takes turns singing with synced
 >   lyrics and vocals removed
@@ -155,8 +158,11 @@ karafilt.com) — no code is fetched or executed.
   records which song you filtered (its title and a normalized per-song key
   derived from the tab URL), the filter mode, and how long the filter was active.
   This is sent to karafilt.com to power your own usage stats (total time, songs,
-  per-mode breakdown) on your account page. Only songs you actively filter are
-  recorded — general browsing is not — and no audio is ever transmitted.
+  per-mode breakdown) on your account page. If you vote on how well the filter
+  worked on a song (a like/dislike with an optional comment), that vote is
+  stored as ratings data with the same song info; only aggregate like/dislike
+  counts are ever shown publicly. Only songs you actively filter are recorded —
+  general browsing is not — and no audio is ever transmitted.
 - ❌ Personally identifiable information (beyond the account email above),
   health, financial, personal communications, location, web history — not
   collected.
@@ -181,7 +187,7 @@ karafilt.com) — no code is fetched or executed.
 ## Versioning note
 
 The store rejects an update whose `manifest.json` `"version"` is not higher
-than the currently published one. This build is `0.4.0` (adds customizable
-lyrics, rating editing/history, usage stats, and a stronger Spectral Deep; new
-`alarms` permission). If `0.4.0` or higher is ever already live, bump again
-before zipping.
+than the currently published one. This build is `1.2.0` (replaces the 1–5 star
+filter rating with a like/dislike vote; YouTube badges now show the community
+like share). If `1.2.0` or higher is ever already live, bump again before
+zipping.

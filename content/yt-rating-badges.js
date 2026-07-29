@@ -1,8 +1,8 @@
-// yt-rating-badges.js — overlay Karafilt's community filter-rating on YouTube
+// yt-rating-badges.js — overlay Karafilt's community filter votes on YouTube
 // video thumbnails, so users see how well vocal removal works on a song BEFORE
 // opening it. Read-only DOM overlay: it scans thumbnail links, batches the video
 // keys to the service worker (which fetches public aggregate stats), and paints a
-// small "★ 4.2" badge on rated videos. No network from the page itself.
+// small "👍 82%" badge on voted videos. No network from the page itself.
 //
 // Opt out by setting localStorage.kflNoBadges = "1".
 (() => {
@@ -22,8 +22,9 @@
   };
   log("content script loaded on", location.href);
 
-  // key -> { avg, count }. Includes negatives ({count:0}) so unrated videos
-  // aren't refetched. Lives for the page session.
+  // key -> { likes, dislikes } (or legacy { avg, count } from an old server).
+  // Includes negatives ({likes:0, dislikes:0}) so unvoted videos aren't
+  // refetched. Lives for the page session.
   const cache = new Map();
   const pending = new Set(); // keys currently in flight
   let scanScheduled = false;
@@ -57,7 +58,31 @@
       delete anchor.dataset.kflKey;
     }
     const stat = cache.get(key);
-    if (!stat || stat.count < 1) return;
+    if (!stat) return;
+    let text, title;
+    if (typeof stat.likes === "number" || typeof stat.dislikes === "number") {
+      const likes = Number(stat.likes) || 0;
+      const dislikes = Number(stat.dislikes) || 0;
+      const total = likes + dislikes;
+      if (total < 1) return;
+      text = "👍 " + Math.round((100 * likes) / total) + "%";
+      title =
+        "Karafilt — vocal removal: " +
+        likes + (likes === 1 ? " like" : " likes") + ", " +
+        dislikes + (dislikes === 1 ? " dislike" : " dislikes");
+    } else if (typeof stat.avg === "number" && stat.count >= 1) {
+      // Pre-1.2 server without like/dislike counts — keep the legacy
+      // star-average render so nothing breaks.
+      text = "★ " + stat.avg.toFixed(1);
+      title =
+        "Karafilt — vocal removal rated " +
+        stat.avg.toFixed(1) +
+        "/5 by " +
+        stat.count +
+        (stat.count === 1 ? " user" : " users");
+    } else {
+      return; // negative-cache entry — nothing to show
+    }
     if (
       anchor.dataset.kflKey === key &&
       anchor.querySelector(":scope > .kfl-rating-badge")
@@ -69,13 +94,8 @@
     }
     const badge = document.createElement("div");
     badge.className = "kfl-rating-badge";
-    badge.textContent = "★ " + stat.avg.toFixed(1);
-    badge.title =
-      "Karafilt — vocal removal rated " +
-      stat.avg.toFixed(1) +
-      "/5 by " +
-      stat.count +
-      (stat.count === 1 ? " user" : " users");
+    badge.textContent = text;
+    badge.title = title;
     anchor.appendChild(badge);
     anchor.dataset.kflKey = key;
   }
@@ -95,14 +115,14 @@
           }
           const stats = res.stats || {};
           for (const k of chunk) {
-            cache.set(k, stats[k] || { avg: 0, count: 0 });
+            cache.set(k, stats[k] || { likes: 0, dislikes: 0 });
           }
           log(
             "fetched",
             chunk.length,
             "keys →",
             Object.keys(stats).length,
-            "rated:",
+            "voted:",
             stats,
           );
           paintAll();

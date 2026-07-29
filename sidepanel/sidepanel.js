@@ -1181,10 +1181,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 });
 
 // --- Filter rating (per song) ─────────────────────────────────────────────
-// "How well did vocal removal work on this song?" — a 1–5 star rating + an
-// optional comment, tied to the current song (a stable video key) and the
-// active filter mode. Sent to the website via the service worker; one rating
-// per user per song (the backend upserts), so re-rating a song updates it.
+// "Did the filter work?" — a like/dislike vote + an optional comment, tied to
+// the current song (a stable video key) and the active filter mode. Sent to
+// the website via the service worker; one vote per user per song (the backend
+// upserts), so re-voting a song updates it.
 const ratingSectionEl = document.getElementById("sp-rating");
 const communityRatingEl = document.getElementById("sp-community-rating");
 const ratingStarsEl = document.getElementById("sp-rating-stars");
@@ -1192,45 +1192,40 @@ const ratingCommentEl = document.getElementById("sp-rating-comment");
 const ratingSubmitEl = document.getElementById("sp-rating-submit");
 const ratingStatusEl = document.getElementById("sp-rating-status");
 const ratingExpandEl = document.getElementById("sp-rating-expand");
-const ratingStarBtns = ratingStarsEl
-  ? Array.from(ratingStarsEl.querySelectorAll(".star"))
+const ratingVoteBtns = ratingStarsEl
+  ? Array.from(ratingStarsEl.querySelectorAll(".vote"))
   : [];
 
-let selectedRating = 0;
+let selectedVote = null; // "like" | "dislike" | null
 let ratingWidgetKey = null; // video key the widget is currently showing
 
 // deriveVideoKey is provided by shared/video-key.js (loaded before this script).
 const deriveVideoKey = globalThis.deriveVideoKey;
 
-function paintStars() {
-  for (const btn of ratingStarBtns) {
-    const v = Number(btn.dataset.value);
-    btn.classList.toggle("selected", v <= selectedRating);
+function paintVote() {
+  for (const btn of ratingVoteBtns) {
+    const on = btn.dataset.vote === selectedVote;
+    btn.classList.toggle("selected", on);
+    btn.setAttribute("aria-pressed", String(on));
   }
-  if (ratingSubmitEl) ratingSubmitEl.disabled = selectedRating < 1;
-  // Keep it compact until a star is chosen: reveal the comment + submit only
-  // once there's a rating (a fresh click, or a pre-filled existing rating).
-  if (ratingExpandEl) ratingExpandEl.style.display = selectedRating > 0 ? "" : "none";
+  if (ratingSubmitEl) ratingSubmitEl.disabled = !selectedVote;
+  // Keep it compact until a vote is chosen: reveal the comment + submit only
+  // once there's a vote (a fresh click, or a pre-filled existing vote).
+  if (ratingExpandEl) ratingExpandEl.style.display = selectedVote ? "" : "none";
 }
 
 function resetRatingWidget() {
-  selectedRating = 0;
+  selectedVote = null;
   if (ratingCommentEl) ratingCommentEl.value = "";
   if (ratingStatusEl) {
     ratingStatusEl.textContent = "";
     ratingStatusEl.className = "hint";
   }
-  paintStars();
+  paintVote();
 }
 
-// Render a 0–5 average as filled/empty stars (rounded to nearest whole star).
-function starString(avg) {
-  const n = Math.max(0, Math.min(5, Math.round(avg)));
-  return "★".repeat(n) + "☆".repeat(5 - n);
-}
-
-// Fetch and show the community average for a video key. Always shows the count
-// (even for 1 rating); shows a "be the first" prompt when there are none.
+// Fetch and show the community like/dislike tally for a video key; shows a
+// "be the first" prompt when there are no votes.
 function loadCommunityRating(key) {
   if (!communityRatingEl) return;
   communityRatingEl.textContent = "";
@@ -1242,23 +1237,25 @@ function loadCommunityRating(key) {
       // Guard against a stale response after the song already changed.
       if (key !== ratingWidgetKey) return;
       const stat = res.stats && res.stats[key];
-      if (stat && stat.count > 0) {
-        communityRatingEl.innerHTML =
-          `<span class="cr-stars">${starString(stat.avg)}</span>` +
-          `<span>${stat.avg.toFixed(1)}</span>` +
-          `<span class="cr-count">· ${stat.count} ` +
-          `rating${stat.count === 1 ? "" : "s"}</span>`;
+      const likes = (stat && Number(stat.likes)) || 0;
+      const dislikes = (stat && Number(stat.dislikes)) || 0;
+      if (likes + dislikes > 0) {
+        communityRatingEl.textContent = `👍 ${likes} · 👎 ${dislikes}`;
+      } else if (stat && Number(stat.count) >= 1 && typeof stat.avg === "number") {
+        // Legacy { avg, count } from an old server (no likes/dislikes yet):
+        // show the star average rather than a wrong "no votes".
+        communityRatingEl.textContent = `★ ${stat.avg.toFixed(1)} · ${stat.count} rating${Number(stat.count) === 1 ? "" : "s"}`;
       } else {
         communityRatingEl.classList.add("cr-empty");
-        communityRatingEl.textContent = "No ratings yet — be the first.";
+        communityRatingEl.textContent = "No votes yet — be the first.";
       }
     },
   );
 }
 
-// Fetch the signed-in user's existing (active) rating for a video key and
-// pre-fill the widget, so they can see and update it rather than rating blind.
-// Silent when not signed in or not yet rated (the widget stays in its reset
+// Fetch the signed-in user's existing (active) vote for a video key and
+// pre-fill the widget, so they can see and update it rather than voting blind.
+// Silent when not signed in or not yet voted (the widget stays in its reset
 // state). Guards against a stale response after the song already changed.
 function loadMyRating(key) {
   chrome.runtime.sendMessage(
@@ -1266,14 +1263,19 @@ function loadMyRating(key) {
     (res) => {
       if (chrome.runtime.lastError || !res || !res.ok) return;
       if (key !== ratingWidgetKey) return;
-      if (!res.rating) return; // not rated yet — leave the reset widget as-is
-      selectedRating = Number(res.rating) || 0;
+      // Prefer the server's liked flag; older servers only send the legacy
+      // 1–5 rating, where 4–5 counts as a like.
+      let liked = null;
+      if (typeof res.liked === "boolean") liked = res.liked;
+      else if (Number(res.rating) > 0) liked = Number(res.rating) >= 4;
+      if (liked === null) return; // not voted yet — leave the reset widget as-is
+      selectedVote = liked ? "like" : "dislike";
       if (ratingCommentEl) ratingCommentEl.value = res.comment || "";
-      paintStars();
+      paintVote();
       if (ratingStatusEl) {
-        ratingStatusEl.textContent = `You rated this ${starString(
-          selectedRating,
-        )} — submit to update.`;
+        ratingStatusEl.textContent = `You voted ${
+          liked ? "👍" : "👎"
+        } — submit to update.`;
         ratingStatusEl.className = "hint";
       }
     },
@@ -1321,16 +1323,16 @@ function updateRatingWidget() {
   reportCurrentSong();
 }
 
-for (const btn of ratingStarBtns) {
+for (const btn of ratingVoteBtns) {
   btn.addEventListener("click", () => {
-    selectedRating = Number(btn.dataset.value) || 0;
-    paintStars();
+    selectedVote = btn.dataset.vote || null;
+    paintVote();
   });
 }
 
 if (ratingSubmitEl) {
   ratingSubmitEl.addEventListener("click", () => {
-    if (selectedRating < 1) return;
+    if (!selectedVote) return;
     const match = currentMatchIdx >= 0 ? allMatches[currentMatchIdx] : null;
     const modeSel = document.getElementById("sp-mode");
     const payload = {
@@ -1340,7 +1342,10 @@ if (ratingSubmitEl) {
       trackName: (match && match.trackName) || null,
       artistName: (match && match.artistName) || null,
       filterMode: (modeSel && modeSel.value) || null,
-      rating: selectedRating,
+      vote: selectedVote,
+      // Star-scale twin of `vote` so a pre-1.2 server still accepts the
+      // submit; the new server ignores it (vote wins when both are present).
+      rating: selectedVote === "like" ? 5 : 1,
       comment: (ratingCommentEl && ratingCommentEl.value.trim()) || null,
       extensionVersion: chrome.runtime.getManifest().version,
     };
@@ -1355,16 +1360,16 @@ if (ratingSubmitEl) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           ratingStatusEl.textContent =
             res && res.status === 401
-              ? "Please sign in to rate."
+              ? "Please sign in to vote."
               : "Couldn't submit — try again.";
           ratingStatusEl.className = "hint err";
           ratingSubmitEl.disabled = false;
           return;
         }
-        ratingStatusEl.textContent = "Rating saved — thanks!";
+        ratingStatusEl.textContent = "Vote saved — thanks!";
         ratingStatusEl.className = "hint ok";
-        // Reflect the new rating in the community average. selectedRating is
-        // kept so the stars stay filled, ready for a further edit.
+        // Reflect the new vote in the community tally. selectedVote is kept
+        // so the chosen button stays lit, ready for a further edit.
         if (payload.videoKey) loadCommunityRating(payload.videoKey);
       },
     );

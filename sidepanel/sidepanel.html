@@ -137,25 +137,22 @@
         </div>
       </div>
 
-      <!-- Filter rating: how well did vocal removal work on this song? Tied to
-           the current song + active mode; sidepanel.js shows it only when a
-           song is playing and hides it after submit. -->
+      <!-- Filter rating: did vocal removal work on this song? Tied to the
+           current song + active mode; sidepanel.js shows it only when a
+           song is playing and resets it when the song changes. -->
       <div class="section filter-rating" id="sp-rating" style="display:none">
-        <!-- Label and stars share one row to keep the section short. -->
+        <!-- Label and vote buttons share one row to keep the section short. -->
         <div class="section-header">
-          <label>Rate the filter</label>
-          <div class="rating-stars" id="sp-rating-stars" role="radiogroup" aria-label="Filter quality rating">
-            <button type="button" class="star" data-value="1" aria-label="1 star">★</button>
-            <button type="button" class="star" data-value="2" aria-label="2 stars">★</button>
-            <button type="button" class="star" data-value="3" aria-label="3 stars">★</button>
-            <button type="button" class="star" data-value="4" aria-label="4 stars">★</button>
-            <button type="button" class="star" data-value="5" aria-label="5 stars">★</button>
+          <label>Did the filter work?</label>
+          <div class="rating-stars" id="sp-rating-stars" role="group" aria-label="Filter feedback">
+            <button type="button" class="vote" data-vote="like" aria-pressed="false" aria-label="Like — the filter worked">👍</button>
+            <button type="button" class="vote" data-vote="dislike" aria-pressed="false" aria-label="Dislike — the filter didn't work">👎</button>
           </div>
         </div>
         <div class="community-rating" id="sp-community-rating"></div>
         <div class="rating-expand" id="sp-rating-expand" style="display:none">
           <textarea id="sp-rating-comment" class="text-input rating-comment" rows="2" maxlength="2000" placeholder="Optional: what worked or didn't?"></textarea>
-          <button id="sp-rating-submit" class="btn-toggle" disabled>Submit rating</button>
+          <button id="sp-rating-submit" class="btn-toggle" disabled>Submit vote</button>
         </div>
         <span class="hint" id="sp-rating-status"></span>
       </div>
