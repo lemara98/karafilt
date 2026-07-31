@@ -447,6 +447,7 @@ function updateWordHighlight(t) {
       const cls =
         t >= end ? "word sung" : t >= start ? "word singing" : "word upcoming";
       if (words[i].className !== cls) words[i].className = cls;
+      setWordProgress(words[i], cls, start, end, t);
     }
     return;
   }
@@ -470,6 +471,24 @@ function updateWordHighlight(t) {
       cls = "word upcoming";
     }
     if (w.className !== cls) w.className = cls;
+    // Estimated timing: each word occupies an equal 1/N slice of the line,
+    // so the singing word's fill is its fractional position in that slice.
+    setWordProgress(w, cls, i / words.length, (i + 1) / words.length, progress);
+  }
+}
+
+// Liquid sweep (KaralyrWordLoader design): the singing word reveals
+// left→right; CSS reads --word-progress off the span. Cleared as soon as
+// the word stops singing so a re-entry (seek back) starts fresh.
+function setWordProgress(el, cls, start, end, t) {
+  if (cls === "word singing") {
+    const pct =
+      end > start
+        ? Math.min(100, Math.max(0, (100 * (t - start)) / (end - start)))
+        : 100;
+    el.style.setProperty("--word-progress", pct.toFixed(1) + "%");
+  } else if (el.style.getPropertyValue("--word-progress")) {
+    el.style.removeProperty("--word-progress");
   }
 }
 
@@ -859,9 +878,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
-// Frame-level interpolation for measured word timing. Runs only while
-// playing AND the active line actually has word times; otherwise it stops
-// and the next PLAYBACK_TIME tick restarts it if needed.
+// Frame-level interpolation for the word sweep. Runs only while playing AND
+// a line is active (measured word times or the estimated equal-slice sweep);
+// otherwise it stops and the next PLAYBACK_TIME tick restarts it if needed.
 let lastPlaybackWall = 0;
 let playbackPaused = true;
 let wordRafId = null;
@@ -874,7 +893,7 @@ function wordRafTick() {
     currentLineIndex >= 0 && currentLineIndex < parsedLines.length
       ? parsedLines[currentLineIndex]
       : null;
-  if (line && line.words) {
+  if (line) {
     updateWordHighlight(t);
   } else if (!inGap) {
     // Nothing animating — stop; the next PLAYBACK_TIME tick restarts us.

@@ -5,6 +5,15 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-07-31
+
+### Changed
+- **Words now fill like on karalyr.com.** The word being sung is revealed
+  left to right with a glowing sweep — the same "liquid" word loading as
+  Karalyr's own player — instead of the whole word lighting up at once.
+  Words already sung hold the highlight colour, and lyrics with only line
+  timing get a smooth estimated sweep across each word too.
+
 ## [1.2.0] — 2026-07-28
 
 ### Changed

@@ -343,7 +343,9 @@ header {
 /* ── Word-level karaoke (only inside active synced line) ── */
 .line .word {
   display: inline-block;
-  transition: color 0.18s ease-out, text-shadow 0.18s ease-out, transform 0.18s ease-out;
+  /* No `color` here: singing (transparent gradient fill) → sung (solid) must
+     swap instantly or the word dips through semi-transparent mid-transition. */
+  transition: text-shadow 0.18s ease-out, transform 0.18s ease-out;
 }
 
 .line.active .word.upcoming {
@@ -351,20 +353,33 @@ header {
   text-shadow: none;
 }
 
+/* Sung words hold the highlight — no highlight→white flash after the sweep. */
 .line.active .word.sung {
-  color: #ffffff;
+  color: var(--lyrics-highlight);
   text-shadow:
-    0 0 12px color-mix(in srgb, var(--lyrics-highlight) 85%, transparent),
+    0 0 12px color-mix(in srgb, var(--lyrics-highlight) 55%, transparent),
     0 1px 0 rgba(0, 0, 0, 0.5);
 }
 
+/* "Liquid sweep" (KaralyrWordLoader design, same as Karalyr's player): the
+   singing word is revealed left→right with a white-hot feathered leading
+   edge at --word-progress (set inline per frame by updateWordHighlight),
+   clipped to the glyphs. The white text-shadow deliberately bleeds through
+   the semi-transparent unfilled part — the lit-from-behind look. The
+   unfilled tail matches .word.upcoming's alpha so the handoff is seamless. */
 .line.active .word.singing {
-  /* The currently-sung word takes the chosen highlight colour outright. */
-  color: var(--lyrics-highlight);
+  background: linear-gradient(
+    90deg,
+    var(--lyrics-highlight) max(0%, calc(var(--word-progress, 0%) - 4%)),
+    #ffffff var(--word-progress, 0%),
+    rgba(255, 255, 255, 0.55) min(100%, calc(var(--word-progress, 0%) + 6%))
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   text-shadow:
-    0 0 18px rgba(255, 255, 255, 0.95),
-    0 0 30px color-mix(in srgb, var(--lyrics-highlight) 75%, transparent),
-    0 1px 0 rgba(0, 0, 0, 0.5);
+    0 0 16px rgba(255, 255, 255, 0.9),
+    0 0 28px color-mix(in srgb, var(--lyrics-highlight) 60%, transparent);
 }
 
 /* Inactive lines: keep text neutral regardless of stale word classes */
