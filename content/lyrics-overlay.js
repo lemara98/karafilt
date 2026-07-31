@@ -654,6 +654,8 @@
         // Karalyr already has word timings for this track — the panel's
         // auto word-sync request uses this to skip submitting it.
         wordTimed: !!r.wordTimed,
+        // The panel's 👍/👎 on Karalyr lyrics signals this revision.
+        karalyrRevisionId: r.karalyrRevisionId || null,
       };
       if (r.syncedLyrics) {
         const lines = parseLRC(r.syncedLyrics);

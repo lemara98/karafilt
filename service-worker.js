@@ -794,6 +794,9 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
       // Word-level timing already exists server-side — the side panel skips
       // auto word-sync requests for these.
       wordTimed: !!(row.karalyr && row.karalyr.has_word_timing),
+      // Lets the side panel rate these lyrics (POST /api/signal needs the
+      // active revision, not the track).
+      karalyrRevisionId: (row.karalyr && row.karalyr.revision_id) || null,
       // effScore convention elsewhere: lower is better; a synced Karalyr hit
       // should win against same-candidate alternatives.
       matchScore: row.syncedLyrics ? -10 : 40,
@@ -1219,6 +1222,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, reason: "upstream" });
         } finally {
           wordSyncInFlight.delete(videoKey);
+        }
+      })();
+      return true; // async response
+
+    case "SIGNAL_KARALYR":
+      // Thumbs up/down on the Karalyr lyrics revision being played. Karalyr's
+      // /api/signal is public (deduped server-side by fingerprint) — no
+      // account needed. Routed through the SW so its host permission bypasses
+      // CORS. 409 means this browser already rated the revision; the panel
+      // treats that as a success and just remembers the vote.
+      (async () => {
+        const revisionId = message.revisionId;
+        const signal = message.signal;
+        if (
+          !Number.isInteger(revisionId) || revisionId <= 0 ||
+          (signal !== "explicit_up" && signal !== "explicit_down")
+        ) {
+          sendResponse({ ok: false, reason: "bad_request" });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            new URL("/api/signal", karalyrBase).toString(),
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ revision_id: revisionId, type: signal }),
+            },
+            8000,
+          );
+          if (res.ok) sendResponse({ ok: true });
+          else if (res.status === 409) sendResponse({ ok: true, already: true });
+          else sendResponse({ ok: false, reason: "upstream" });
+        } catch {
+          sendResponse({ ok: false, reason: "network" });
         }
       })();
       return true; // async response

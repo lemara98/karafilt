@@ -227,6 +227,82 @@ function setSourceBadge(text, karalyrWordSync) {
   }
 }
 
+// --- Rate the Karalyr lyrics (👍/👎 → /api/signal on karalyr.com) ---
+// Shown whenever the visible lyrics carry a Karalyr revision id. Votes are
+// remembered locally so a revisited song shows the earlier choice and the
+// buttons lock; Karalyr dedupes server-side too (a repeat just 409s).
+const karalyrRateEl = document.getElementById("karalyr-rate");
+const KARALYR_RATED_KEY = "karalyrRatedRevisions";
+const KARALYR_RATED_MAX = 500;
+let karalyrRatedCache = null; // storage mirror; null until loaded
+let karalyrRevisionId = null; // revision the visible lyrics came from
+chrome.storage.local.get({ [KARALYR_RATED_KEY]: {} }, (s) => {
+  karalyrRatedCache = s[KARALYR_RATED_KEY] || {};
+  renderKaralyrRating();
+});
+
+function setKaralyrRating(revisionId) {
+  karalyrRevisionId =
+    Number.isInteger(revisionId) && revisionId > 0 ? revisionId : null;
+  renderKaralyrRating();
+}
+
+function renderKaralyrRating() {
+  if (!karalyrRateEl) return;
+  if (!karalyrRevisionId) {
+    karalyrRateEl.hidden = true;
+    return;
+  }
+  karalyrRateEl.hidden = false;
+  const voted = karalyrRatedCache && karalyrRatedCache[karalyrRevisionId];
+  karalyrRateEl.classList.toggle("rated", !!voted);
+  for (const btn of karalyrRateEl.querySelectorAll(".karalyr-rate-btn")) {
+    btn.setAttribute(
+      "aria-pressed",
+      String(!!voted && voted.s === btn.dataset.signal),
+    );
+  }
+}
+
+function rememberKaralyrRating(revisionId, signal) {
+  if (!karalyrRatedCache) karalyrRatedCache = {};
+  karalyrRatedCache[revisionId] = { s: signal, t: Date.now() };
+  // Keep only the newest entries so the object can't grow unbounded.
+  const keys = Object.keys(karalyrRatedCache);
+  if (keys.length > KARALYR_RATED_MAX) {
+    keys.sort(
+      (a, b) => (karalyrRatedCache[a].t || 0) - (karalyrRatedCache[b].t || 0),
+    );
+    for (const k of keys.slice(0, keys.length - KARALYR_RATED_MAX)) {
+      delete karalyrRatedCache[k];
+    }
+  }
+  chrome.storage.local.set({ [KARALYR_RATED_KEY]: karalyrRatedCache });
+}
+
+if (karalyrRateEl) {
+  karalyrRateEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".karalyr-rate-btn");
+    if (!btn || !karalyrRevisionId) return;
+    const revisionId = karalyrRevisionId;
+    if (karalyrRatedCache && karalyrRatedCache[revisionId]) return;
+    const signal = btn.dataset.signal;
+    // Optimistic: lock in instantly; a failed send un-marks so retry works.
+    rememberKaralyrRating(revisionId, signal);
+    renderKaralyrRating();
+    chrome.runtime.sendMessage(
+      { type: "SIGNAL_KARALYR", revisionId, signal },
+      (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          delete karalyrRatedCache[revisionId];
+          chrome.storage.local.set({ [KARALYR_RATED_KEY]: karalyrRatedCache });
+          renderKaralyrRating();
+        }
+      },
+    );
+  });
+}
+
 // Parse an LRC string into [{time, text}, ...]. Mirrors content/lyrics-overlay.js
 // — needed here so the side panel can render an alternative without a content-
 // script round-trip.
@@ -337,6 +413,7 @@ function switchToMatch(index) {
 
   const sourceLabel = (m.source || "match") + (isSynced ? " (synced)" : " (unsynced)");
   setSourceBadge(sourceLabel);
+  setKaralyrRating(m.source === "karalyr" ? m.karalyrRevisionId : null);
   setStatus("");
   renderMatchesPicker();
   // Collapse the alternatives dropdown after a manual pick — the user just
@@ -381,6 +458,7 @@ if (refreshBtn) {
       lastRenderedCount = 0;
       lastRenderedMode = null;
       setSourceBadge("");
+      setKaralyrRating(null);
       setStatus("Refreshing…");
       setGoogleButtonVisible(false);
       renderMatchesPicker();
@@ -702,6 +780,7 @@ function resetDisplay(statusText) {
   lastRenderedMode = null;
   songTitleEl.textContent = "—";
   setSourceBadge("");
+  setKaralyrRating(null);
   setStatus(statusText || "");
   setGoogleButtonVisible(false);
   renderMatchesPicker();
@@ -836,9 +915,15 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         !!(incomingPrimary && incomingPrimary.source === "karalyr") &&
         parsedLines.some((l) => l.words && l.words.length > 0);
       setSourceBadge(state.status || "", karalyrWordSync);
+      setKaralyrRating(
+        incomingPrimary && incomingPrimary.source === "karalyr"
+          ? incomingPrimary.karalyrRevisionId
+          : null,
+      );
       setGoogleButtonVisible(false);
     } else {
       setSourceBadge("");
+      setKaralyrRating(null);
       setStatus(state.status || (hasMedia ? "Play a song to see lyrics" : "No media on this tab"));
       // Show Google search button if a "no lyrics found" state and we have a media title
       const isNotFound =

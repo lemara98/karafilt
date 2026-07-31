@@ -28,6 +28,13 @@
         <div class="header-right-row">
           <!-- Transient confirmation after an auto word-sync request lands. -->
           <span class="wordsync-hint" id="wordsync-hint" hidden>Word-sync requested ✓</span>
+          <!-- Rate the Karalyr lyrics being played: 👍/👎 signals the active
+               revision on karalyr.com. Shown only when the current lyrics come
+               from Karalyr (sidepanel.js knows the revision id). -->
+          <span class="karalyr-rate" id="karalyr-rate" role="group" aria-label="Rate these karaoke lyrics" hidden>
+            <button type="button" class="karalyr-rate-btn" data-signal="explicit_up" aria-pressed="false" title="Good karaoke — rate these lyrics up on Karalyr">👍</button>
+            <button type="button" class="karalyr-rate-btn" data-signal="explicit_down" aria-pressed="false" title="Bad sync or lyrics — rate them down on Karalyr">👎</button>
+          </span>
           <span class="source-badge" id="source-badge"></span>
           <button id="refresh-lyrics" class="refresh-btn" title="Refresh lyrics">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">

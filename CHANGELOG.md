@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.1] — 2026-07-31
 
+### Added
+- **Rate Karalyr karaoke lyrics.** When the lyrics you're playing come from
+  Karalyr, 👍/👎 buttons appear next to the source badge — one tap tells
+  karalyr.com whether the karaoke lyrics were good, helping the community
+  surface the best sync for every song. No account needed, one vote per song
+  version, and your vote is remembered.
+
 ### Changed
 - **Words now fill like on karalyr.com.** The word being sung is revealed
   left to right with a glowing sweep — the same "liquid" word loading as

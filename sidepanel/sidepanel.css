@@ -98,6 +98,46 @@ header {
 
 .source-badge.visible { display: inline-block; }
 
+/* Rate-the-Karalyr-lyrics thumbs, sitting beside the source badge. Sized to
+   match the badge height so the header row doesn't grow. */
+.karalyr-rate {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.karalyr-rate[hidden] { display: none; }
+.karalyr-rate-btn {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  cursor: pointer;
+  /* Emoji render greyscale until chosen, so the pair reads as buttons. */
+  filter: grayscale(1);
+  opacity: 0.7;
+  transition: filter 0.15s, opacity 0.15s, border-color 0.15s, background 0.15s;
+}
+.karalyr-rate-btn:hover {
+  filter: none;
+  opacity: 1;
+  border-color: rgba(255, 107, 157, 0.5);
+}
+.karalyr-rate-btn[aria-pressed="true"] {
+  filter: none;
+  opacity: 1;
+  background: linear-gradient(
+    135deg,
+    rgba(180, 108, 255, 0.25),
+    rgba(255, 107, 157, 0.25)
+  );
+  border-color: rgba(255, 107, 157, 0.6);
+}
+/* Once rated, the pair locks: the un-chosen thumb fades out of reach. */
+.karalyr-rate.rated .karalyr-rate-btn { pointer-events: none; }
+.karalyr-rate.rated .karalyr-rate-btn[aria-pressed="false"] { opacity: 0.3; }
+
 /* Karalyr word-synced lyrics: the K built from lyric lines, rows sweeping
    top-to-bottom like a playhead, with a soft bounce to catch the eye. */
 .source-badge.karalyr {
