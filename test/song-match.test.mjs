@@ -289,6 +289,45 @@ function runIdentityCovers() {
   return { ok, total: cases.length };
 }
 
+// ── Offline: accept() artist gate ───────────────────────────────────────────
+// A same-titled row by a clearly different artist (the "Hello by anyone" trap)
+// must NOT be accepted when the wanted artist is known — unless the recording
+// duration corroborates it (compilation rows, odd artist spellings).
+function runAcceptGate() {
+  console.log(C.b("\n── Offline: accept() artist gate ──\n"));
+  const row = (artistName, trackName, duration = 0) =>
+    ({ artistName, trackName, duration, syncedLyrics: "[00:01.00] la", plainLyrics: null });
+  const cases = [
+    // same title + matching artist → accept
+    [row("Adele", "Hello", 295), { track: "Hello", artist: "Adele", durationSec: 296 }, true],
+    // same title + clearly different artist, no duration signal → REJECT
+    [row("Lionel Richie", "Hello", 0), { track: "Hello", artist: "Adele", durationSec: 0 }, false],
+    // same title + different artist + disagreeing duration → REJECT
+    [row("Lionel Richie", "Hello", 245), { track: "Hello", artist: "Adele", durationSec: 296 }, false],
+    // same title + odd stored artist but duration corroborates → accept
+    [row("Various Artists", "Hello", 295), { track: "Hello", artist: "Adele", durationSec: 296 }, true],
+    // title-only candidate (no artist expectation) → title match stands
+    [row("Lionel Richie", "Hello", 0), { track: "Hello", artist: "", durationSec: 0 }, true],
+    // artist stored with a script gloss (substring match) → accept
+    [row("BTS (방탄소년단)", "Dynamite", 0), { track: "Dynamite", artist: "BTS", durationSec: 0 }, true],
+    // noise-word title variant + matching artist → accept (path unchanged)
+    [row("Adele", "Hello (Remastered)", 0), { track: "Hello", artist: "Adele", durationSec: 0 }, true],
+    // Path A unchanged: close track + strong artist
+    [row("Adele", "Helo", 0), { track: "Hello", artist: "Adele", durationSec: 0 }, true],
+    // Path B unchanged: tight duration + roughly-close title, artist differs
+    [row("Someone Else", "abXdeXghXj", 296), { track: "abcdefghij", artist: "Adele", durationSec: 296 }, true],
+  ];
+  let ok = 0;
+  for (const [r, want, expected] of cases) {
+    const got = SM.accept(r, want);
+    const pass = got === expected;
+    if (pass) ok++;
+    console.log(`  ${pass ? C.g("✓") : C.r("✗")} want {${want.artist || "∅"} | ${want.track} | ${want.durationSec}s} vs row {${r.artistName} | ${r.trackName} | ${r.duration}s} → ${got}`);
+  }
+  console.log(`\n  accept gate: ${C.b(`${ok}/${cases.length}`)}`);
+  return { ok, total: cases.length };
+}
+
 // ── Online hit-rate ─────────────────────────────────────────────────────────
 async function runOnline(resolver, label) {
   console.log(C.b(`\n── Online: ${label} vs live LRCLib ──\n`));
@@ -321,11 +360,12 @@ async function runOnline(resolver, label) {
 (async () => {
   const off = runOffline();
   const cov = runIdentityCovers();
+  const acc = runAcceptGate();
   if (!ONLINE && !BASELINE) {
     console.log(C.dim("\n(run with --online to measure live LRCLib hit-rate, --baseline to compare the old logic)\n"));
     // exit non-zero if offline parsing regressed below a floor
     const parseOK = off.pairOK >= Math.ceil(corpus.length * 0.85);
-    process.exit(parseOK && cov.ok === cov.total ? 0 : 1);
+    process.exit(parseOK && cov.ok === cov.total && acc.ok === acc.total ? 0 : 1);
   }
   let oldRes, newRes;
   if (BASELINE) oldRes = await runOnline(resolveOld, "OLD algorithm");

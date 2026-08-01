@@ -495,14 +495,30 @@
   }
 
   // ── Result scoring ─────────────────────────────────────────────────────
-  // A row is accepted if its track fuzzy-matches (15%), OR the track is close
-  // (30%) AND the artist strongly matches, OR — new — the recording DURATION
-  // matches within ~3s AND the title is at least roughly close (35%). A
-  // near-exact duration is strong evidence it's the same recording, so it
-  // recovers remix / "feat" / translated-title rows LRCLib stores under a
-  // different name. Artist alone never rejects a track match.
+  // A row is accepted if its track fuzzy-matches (15%) AND its artist doesn't
+  // contradict a known wanted artist — a same-titled row by a clearly
+  // different artist is the classic wrong-lyrics trap, so it needs the
+  // recording duration to corroborate. OR the track is close (30%) AND the
+  // artist strongly matches, OR the recording DURATION matches within ~3s AND
+  // the title is at least roughly close (35%) — near-exact duration is strong
+  // evidence it's the same recording, so it recovers remix / "feat" /
+  // translated-title rows LRCLib stores under a different name.
+  const DURATION_CORROBORATION_SEC = 5;
+  function durationCorroborates(rowDur, wantDur) {
+    return !!(wantDur > 0 && rowDur > 0 &&
+      Math.abs(rowDur - wantDur) <= DURATION_CORROBORATION_SEC);
+  }
   function accept(row, want) {
-    if (fuzzyTrackMatch(row.trackName, want.track)) return true;
+    if (fuzzyTrackMatch(row.trackName, want.track)) {
+      // Title-only candidate (no artist expectation) — the match stands.
+      if (!want.artist) return true;
+      if (artistMatchStrong(row.artistName, want.artist)) return true;
+      // Same title under a clearly different artist: a cover, or an
+      // unrelated song that shares the name. Believe it only when the
+      // recording length agrees (compilation rows often store an odd
+      // artist but the right recording).
+      return durationCorroborates(row.duration, want.durationSec);
+    }
     const a = normalizeForMatch(row.trackName);
     const b = normalizeForMatch(want.track);
     if (!a || !b) return false;
@@ -610,6 +626,7 @@
     fuzzyTrackMatch, artistMatchStrong,
     cleanTitle, stripArtistFromTrack, expandArtists, dedupCandidates,
     metadataMatchesTitle, parseTitle, extractQuoted, preferGloss, splitColon,
-    buildLrclibRequests, accept, scoreRow, pickBest, durationPenalty, identityCovers,
+    buildLrclibRequests, accept, scoreRow, pickBest, durationPenalty,
+    durationCorroborates, identityCovers,
   };
 });

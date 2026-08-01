@@ -354,32 +354,57 @@
     const effScore = (r) =>
       r.matchScore != null ? r.matchScore : isSynced(r) ? -5 : 50;
 
-    // Phase 1: fire the LRCLib-only lookups in parallel, but DON'T wait for the
-    // slowest. Resolve the moment any synced result arrives, and surface the
-    // first plain result immediately via onPartial so something shows while the
-    // rest (and a possible synced upgrade) are still in flight.
+    // Phase 1: fire the LRCLib-only lookups in parallel, but resolve in
+    // CANDIDATE PRIORITY order, not arrival order. Candidates are ranked by
+    // trust (page metadata first, artist-less title-only floor last); a
+    // synced result from candidate i only wins once every earlier candidate
+    // has settled without one. First-response-wins let a weak same-title
+    // candidate — often served instantly from the SW cache — beat the
+    // trusted candidate still on the network, which is exactly how another
+    // artist's identically-named song got shown. The one exception: a
+    // Karalyr by-video-id hit resolves immediately from any candidate — its
+    // identity comes from the video id itself, not the parsed name.
     const phase1 = await new Promise((resolve) => {
-      let settled = 0, done = false, bestPlain = null, shownPlain = false;
+      const results = new Array(candidates.length); // undefined = in flight
+      let done = false, shownPlain = false;
       const finish = (r) => { if (!done) { done = true; resolve(r); } };
-      candidates.forEach((c) => {
+      const isById = (r) => r && r.found && r.matchedBy === "video-id";
+      const settle = () => {
+        if (done) return;
+        let bestPlain = null;
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r === undefined) {
+            // An earlier (more trusted) candidate is still pending — show the
+            // best plain settled so far while we wait for it.
+            if (bestPlain && !shownPlain && onPartial) { shownPlain = true; onPartial(bestPlain); }
+            return;
+          }
+          if (r && r.found) {
+            if (isSynced(r)) {
+              if (onPartial) onPartial(r);
+              return finish(r);
+            }
+            if (!bestPlain || effScore(r) < effScore(bestPlain)) bestPlain = r;
+          }
+        }
+        finish(bestPlain || { found: false });
+      };
+      candidates.forEach((c, i) => {
         sendFetchLyrics(c, { lrclibOnly: true, forceRefresh, durationSec })
           .then((r) => {
-            settled++;
             if (done) return;
             if (r && r.invalidated) return finish(r);
-            if (r && r.found) {
-              if (isSynced(r)) {
-                if (onPartial) onPartial(r);   // show synced right away
-                return finish(r);              // synced = best; stop waiting
-              }
-              if (!bestPlain || effScore(r) < effScore(bestPlain)) bestPlain = r;
-              if (!shownPlain && onPartial) { shownPlain = true; onPartial(r); }
+            if (isById(r) && isSynced(r)) {
+              if (onPartial) onPartial(r);
+              return finish(r);
             }
-            if (settled === candidates.length) finish(bestPlain || { found: false });
+            results[i] = r || { found: false };
+            settle();
           })
           .catch(() => {
-            settled++;
-            if (settled === candidates.length) finish(bestPlain || { found: false });
+            results[i] = { found: false };
+            settle();
           });
       });
       if (candidates.length === 0) finish({ found: false });

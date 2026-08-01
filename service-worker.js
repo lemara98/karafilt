@@ -509,8 +509,12 @@ async function handleFetchLyrics(artist, track, tabId, opts) {
   return fetchFromLRCLib(artist, track, { lrclibOnly, forceRefresh, skipLrclib, durationSec, album, videoKey });
 }
 
-function cacheKey(artist, track) {
-  return `${(artist || "").toLowerCase()}|${(track || "").toLowerCase()}`;
+// Keyed by video identity AS WELL as the parsed name: Karalyr resolves lyrics
+// by video id, so the same {artist, track} candidate can legitimately map to
+// different lyrics on different videos (same-titled songs, covers, sped-up
+// re-uploads). A name-only key served video A's lyrics to video B.
+function cacheKey(artist, track, videoKey) {
+  return `${videoKey || ""}|${(artist || "").toLowerCase()}|${(track || "").toLowerCase()}`;
 }
 
 // normalizeForMatch / levenshtein / fuzzyTrackMatch now live in
@@ -649,10 +653,17 @@ async function fetchFromGenius(artist, track) {
     }
 
     const wanted = normalizeForMatch(track);
-    const matching = songHits
+    const titleMatches = songHits
       .filter((h) => fuzzyTrackMatch(h.title, track))
       .map((h) => ({ ...h, dist: levenshtein(normalizeForMatch(h.title), wanted) }))
       .sort((a, b) => a.dist - b.dist);
+    // With a known artist, only accept hits whose primary artist matches it —
+    // Genius search happily returns a same-titled song by someone else, and as
+    // the last-resort source nothing downstream would catch that. Showing no
+    // lyrics beats showing another artist's.
+    const matching = artist
+      ? titleMatches.filter((h) => SM.artistMatchStrong(h.artist, artist))
+      : titleMatches;
 
     if (matching.length === 0) return { found: false };
 
@@ -722,7 +733,9 @@ try {
 } catch (e) { /* keep default */ }
 
 async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
-  if (!karalyrBase || !artist || !track) return { found: false };
+  // The by-video-id lookup needs no parsed name at all — only skip entirely
+  // when there's neither a video key nor a usable {artist, track} pair.
+  if (!karalyrBase || (!videoKey && (!artist || !track))) return { found: false };
 
   const fetchJson = async (path, params) => {
     const u = new URL(path, karalyrBase);
@@ -774,16 +787,21 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
     // the newer video_key param — an older server just 404s and the chain
     // falls through to name matching.
     let row = null;
+    let matchedBy = "name";
     if (videoKey && videoKey.startsWith("yt:")) {
       row = await fetchJson("/api/get", { youtube_id: videoKey.slice(3) });
+      if (row) matchedBy = "video-id";
     } else if (videoKey && videoKey.startsWith("sp:")) {
       row = await fetchJson("/api/get", { video_key: videoKey });
+      if (row) matchedBy = "video-id";
     }
-    if (!row) row = await tryGet(artist, track, album, durationSec > 0 ? durationSec : 0);
-    if (!row && durationSec > 0) row = await tryGet(artist, track, album, 0);
-    if (!row) row = await trySearch();
+    if (!row && artist && track) {
+      row = await tryGet(artist, track, album, durationSec > 0 ? durationSec : 0);
+      if (!row && durationSec > 0) row = await tryGet(artist, track, album, 0);
+      if (!row) row = await trySearch();
+    }
     if (!row || (!row.syncedLyrics && !row.plainLyrics)) return { found: false };
-    dbg(`[SW] Karalyr hit: ${row.artistName} — ${row.trackName} (tier ${row.karalyr && row.karalyr.tier})`);
+    dbg(`[SW] Karalyr hit (${matchedBy}): ${row.artistName} — ${row.trackName} (tier ${row.karalyr && row.karalyr.tier})`);
     return {
       found: true,
       syncedLyrics: row.syncedLyrics || null,
@@ -791,15 +809,23 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
       trackName: row.trackName,
       artistName: row.artistName,
       source: "karalyr",
+      // "video-id" = resolved from the video's own identity (ground truth for
+      // this exact video); "name" = resolved by parsed-name matching, no more
+      // trustworthy than any other name match. The content script fast-tracks
+      // only the former.
+      matchedBy,
       // Word-level timing already exists server-side — the side panel skips
       // auto word-sync requests for these.
       wordTimed: !!(row.karalyr && row.karalyr.has_word_timing),
       // Lets the side panel rate these lyrics (POST /api/signal needs the
       // active revision, not the track).
       karalyrRevisionId: (row.karalyr && row.karalyr.revision_id) || null,
-      // effScore convention elsewhere: lower is better; a synced Karalyr hit
-      // should win against same-candidate alternatives.
-      matchScore: row.syncedLyrics ? -10 : 40,
+      // effScore convention elsewhere: lower is better. A by-id hit is
+      // identity-certain; a name-based hit gets an honest composite score so
+      // it competes fairly with LRCLib picks instead of always winning.
+      matchScore: matchedBy === "video-id"
+        ? (row.syncedLyrics ? -10 : 40)
+        : SM.scoreRow(row, { track, artist, durationSec }),
       matchSynced: !!row.syncedLyrics,
       alternatives: [],
     };
@@ -818,7 +844,7 @@ async function fetchFromLRCLib(artist, track, opts) {
   const album = (opts && opts.album) || "";
   const durationSec = (opts && opts.durationSec) || 0;
   const videoKey = (opts && opts.videoKey) || null;
-  const key = cacheKey(artist, track);
+  const key = cacheKey(artist, track, videoKey);
   if (!forceRefresh && lyricsCache.has(key)) return lyricsCache.get(key);
 
   let result = { found: false };
