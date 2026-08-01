@@ -43,8 +43,20 @@ function currentSongVideoKey() {
   return lastStateVideoKey || deriveVideoKey(lastKnownUrl);
 }
 
+// "lyrics" in the language the SONG is written in — keyed off the title's
+// script, not the UI locale, so a Hindi song searched from any browser gets
+// the query that actually finds Hindi lyric sites.
+function lyricsSearchTerm(title) {
+  if (/[ऀ-ॿ]/.test(title)) return "गाने के बोल"; // Devanagari
+  if (/[฀-๿]/.test(title)) return "เนื้อเพลง"; // Thai
+  if (/[㐀-䶿一-鿿豈-﫿]/.test(title)) return "歌詞"; // Han
+  if (/[가-힯]/.test(title)) return "가사"; // Hangul
+  if (/[ơưđạảềếễệ]/i.test(title)) return "lời bài hát"; // Vietnamese
+  return "lyrics";
+}
+
 googleSearchBtn.addEventListener("click", () => {
-  const q = lastCleanedTitle ? `${lastCleanedTitle} lyrics` : "lyrics";
+  const q = lastCleanedTitle ? `${lastCleanedTitle} ${lyricsSearchTerm(lastCleanedTitle)}` : "lyrics";
   const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
   chrome.tabs.create({ url });
 });

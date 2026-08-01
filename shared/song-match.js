@@ -55,12 +55,20 @@
     /\b(hd|hq|uhd|4k|8k|2160p|1440p|1080p?|720p|audio|video|lyric|lyrics|official|oficial|officiel|mv|live|vivo|directo|remaster|remastered|remix|rmx|stereo|mono|version|visualizer|visualiser|performance)\b/g;
 
   function normalizeForMatch(s) {
-    return asciiFold(s || "")
-      .replace(NOISE_WORDS, " ")
-      .replace(/[^a-z0-9]+/g, " ")
-      // drop a trailing "feat …" / "featuring …" clause some rows embed
-      .replace(/\s(feat|ft|featuring|prod)\s.*$/, "")
-      .trim();
+    return (
+      asciiFold(s || "")
+        .replace(NOISE_WORDS, " ")
+        // Keep letters, marks, and digits in EVERY script — [^a-z0-9] erased
+        // Devanagari/Thai/Han titles to "" and no match could ever succeed.
+        // \p{M} matters: Indic/Thai vowel signs are marks. Latin/Cyrillic
+        // output is unchanged (asciiFold already reduced it to ASCII).
+        .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
+        // drop a trailing "feat …" / "featuring …" clause some rows embed
+        .replace(/\s(feat|ft|featuring|prod)\s.*$/, "")
+        .trim()
+        // One form regardless of how the title was typed (NFD keyboards).
+        .normalize("NFC")
+    );
   }
 
   // ── Levenshtein (two rolling rows) ─────────────────────────────────────
@@ -139,11 +147,38 @@
     /\s*\(\d{4}[^)]*\)/, /\s*\[\d{4}[^\]]*\]/,
     // trailing bare quality / format words
     /\s*[\(\[]?\b(?:full\s*hd|hd|uhd|4k|8k|hq|m\/?v|av)\b[\)\]]?\s*$/i,
-    /\s*[\(\[]?\b(?:official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|lyrics?|audio|visuali[sz]er)\b[\)\]]?\s*$/i,
+    /\s*[\(\[]?\b(?:official\s+(?:music\s+)?(?:video|mv)|official\s+audio|lyric\s+video|lyrics?|audio|visuali[sz]er)\b[\)\]]?\s*$/i,
     // trailing platform suffixes
     /\s*\|\s*spotify\s*$/i, /\s*-\s*youtube\s*$/i, /\s*-\s*soundcloud\s*$/i,
     // trailing ", First Last, First Last" YouTube featured-artist convention
     /(\s*,\s*[\p{Lu}]\p{Ll}+(?:\s+[\p{Lu}]\p{Ll}+){0,2}){2,}\s*$/u,
+
+    // ── Per-market noise (community-extendable; keep one market per block,
+    //    prove every addition with a test/corpus.json row) ────────────────
+    // India: "Song | Full Video Song | Lyrical | Audio Jukebox" tag piles
+    /\s*[\(\[|:-]\s*(?:full\s+)?(?:video|audio)\s+song\s*[\)\]]?\s*$/i,
+    // …and the same tags mid-title, before a pipe segment (the lookahead
+    // keeps the segment separator " | " intact)
+    /\s*[-–—|]\s*(?:full\s+)?(?:video|audio)\s+song(?=\s*\|)/i,
+    /\s*[-–—|]\s*lyrical(?:\s+video)?(?=\s*\|)/i,
+    /\s*\((?:full\s+)?(?:video|audio)\s+song[^)]*\)/i,
+    /\s*\[(?:full\s+)?(?:video|audio)\s+song[^\]]*\]/i,
+    /\s*\(lyrical(?:\s+video)?[^)]*\)/i, /\s*\[lyrical(?:\s+video)?[^\]]*\]/i,
+    /\s*[\(\[|:-]\s*lyrical\s*[\)\]]?\s*$/i,
+    /\s*\((?:audio\s+)?jukebox[^)]*\)/i, /\s*[\|\-]\s*(?:audio\s+)?jukebox\s*$/i,
+    // Vietnam/SEA: OST markers, fan-sub tags, karaoke-beat uploads
+    /\s*\((?:[^)]*\b)?ost\b[^)]*\)/i, /\s*\[(?:[^\]]*\b)?ost\b[^\]]*\]/i,
+    /\s*[\|\-]\s*[^|\-]*\bost\b\s*$/i,
+    /\s*[\(\[]\s*(?:viet|eng|indo)sub[^\)\]]*[\)\]]/i,
+    /\s*[\|\-]\s*(?:viet|eng|indo)sub.*$/i,
+    /\s*[\(\[]\s*karaoke\s*(?:beat|version)?[^\)\]]*[\)\]]/i,
+    // Chinese-speaking uploads: 【…】「…」『…』 brackets and common tags —
+    // strip the whole bracket only when it contains a known noise term
+    // (官方 official, 歌詞/歌词 lyrics, 動態歌詞 lyric video, 完整版 full
+    // version, 高清 HD, 現場 live, 音頻 audio).
+    /\s*【[^】]*(?:官方|歌詞|歌词|動態|动态|完整版|高清|現場|现场|音頻|音频|MV|4K|HD)[^】]*】/i,
+    /\s*「[^」]*(?:官方|歌詞|歌词|動態|动态|完整版|高清|現場|现场|音頻|音频|MV|4K|HD)[^」]*」/i,
+    /\s*『[^』]*(?:官方|歌詞|歌词|動態|动态|完整版|高清|現場|现场|音頻|音频|MV|4K|HD)[^』]*』/i,
   ];
 
   function cleanTitle(s) {
@@ -181,7 +216,9 @@
 
   // ── Candidate generation ───────────────────────────────────────────────
   function looksLikeName(s) {
-    return /[A-Za-zÀ-ɏЀ-ӿ]/.test(s) && s.trim().length >= 2;
+    // Any letter in any script (the old Latin+Cyrillic class rejected
+    // Devanagari/Thai/Han names, so collab splits never fired for them).
+    return /\p{L}/u.test(s) && s.trim().length >= 2;
   }
 
   // Yield [{full artist, track}, {split piece, track}…]. Conservative on " x ".
@@ -252,7 +289,7 @@
     // single / smart single quotes — require surrounding whitespace so we
     // don't trip on apostrophes inside words ("Don't", "Rock 'n' Roll").
     m = s.match(/(?:^|\s)[‘']([^’']{2,}?)[’'](?=\s|$)/);
-    if (m && /[A-Za-zÀ-ɏЀ-ӿ　-鿿가-힯]/.test(m[1])) {
+    if (m && /\p{L}/u.test(m[1])) {
       return { before: s.slice(0, m.index), inner: m[1] };
     }
     return null;
@@ -329,6 +366,18 @@
         if (author) pushExp(author, track);
         candidates.push({ artist: "", track });
       }
+    }
+
+    // 3b. East-Asian title brackets — `Artist【Track】…`. cleanTitle already
+    //     removed noise-bearing 【】 blocks, so a surviving one IS the title
+    //     (the dominant zh-TW/HK upload convention).
+    const cjkBracket = title.match(/^(.+?)【([^】]{1,80})】/);
+    if (cjkBracket && looksLikeName(cjkBracket[2])) {
+      const track = cjkBracket[2].trim();
+      const artist = cleanArtist(cjkBracket[1]);
+      if (artist) pushExp(artist, track);
+      if (author) pushExp(author, track);
+      candidates.push({ artist: "", track });
     }
 
     // 4. Pipe-separated "Artist | Track | …"

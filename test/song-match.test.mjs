@@ -357,15 +357,41 @@ async function runOnline(resolver, label) {
   return { hits, synced, total: corpus.length };
 }
 
+// ── Cross-repo normalizer parity ──────────────────────────────────────────
+// karalyr's lib/song-key.ts mirrors normalizeForMatch; these vectors are
+// pinned in BOTH repos' tests (karalyr: tests/song-key.test.ts) so the two
+// normalizers can't silently drift on non-Latin content. Known, documented
+// divergence: đ (extension "d", karalyr "dj") — not asserted here.
+function runSharedVectors() {
+  console.log(C.b("\n── Offline: cross-repo normalizer parity vectors ──\n"));
+  const vectors = [
+    ["तुम ही हो", "तुम ही हो"],
+    ["เธอคือของขวัญ", "เธอคือของขวัญ"],
+    ["月亮代表我的心", "月亮代表我的心"],
+    ["Здраво", "zdravo"],
+  ];
+  let ok = 0;
+  for (const [input, expected] of vectors) {
+    const got = SM.normalizeForMatch(input);
+    const pass = got === expected;
+    if (pass) ok++;
+    console.log(`  ${pass ? C.g("✓") : C.r("✗")} ${input} → ${got}`);
+  }
+  return { ok, total: vectors.length };
+}
+
 (async () => {
   const off = runOffline();
   const cov = runIdentityCovers();
   const acc = runAcceptGate();
+  const vec = runSharedVectors();
   if (!ONLINE && !BASELINE) {
     console.log(C.dim("\n(run with --online to measure live LRCLib hit-rate, --baseline to compare the old logic)\n"));
     // exit non-zero if offline parsing regressed below a floor
     const parseOK = off.pairOK >= Math.ceil(corpus.length * 0.85);
-    process.exit(parseOK && cov.ok === cov.total && acc.ok === acc.total ? 0 : 1);
+    process.exit(
+      parseOK && cov.ok === cov.total && acc.ok === acc.total && vec.ok === vec.total ? 0 : 1
+    );
   }
   let oldRes, newRes;
   if (BASELINE) oldRes = await runOnline(resolveOld, "OLD algorithm");
