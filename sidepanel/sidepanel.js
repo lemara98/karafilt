@@ -138,6 +138,11 @@ function updateGapBar(t) {
   return true;
 }
 let lastPlaybackTime = 0;
+// Highlights fire this much ahead of the playback clock (mirrors Karalyr's
+// LYRIC_LEAD_MS): the CTC aligner behind word-timed lyrics marks onsets
+// 20-60ms late, and the paint lands a frame behind the audio. Applied only
+// while playing so paused scrubbing stays exact.
+const LYRIC_LEAD_SECONDS = 0.05;
 let lastRenderedCount = 0;
 let lastRenderedMode = null;  // "synced" | "plain" | null
 // Karaoke (focus) view: shows only the active line plus its immediate
@@ -722,12 +727,12 @@ function autoScrollPlainLyrics(t) {
 
 let syncLogCount = 0;
 function syncToPlaybackTime(t) {
-  updateGapBar(t);
+  const adjusted = playbackPaused ? t : t + LYRIC_LEAD_SECONDS;
+  updateGapBar(adjusted);
   if (parsedLines.length === 0) {
     autoScrollPlainLyrics(t);
     return;
   }
-  const adjusted = t;
   // Binary search for the last line with time <= adjusted
   let lo = 0, hi = parsedLines.length - 1, found = -1;
   while (lo <= hi) {
@@ -972,7 +977,8 @@ let wordRafId = null;
 function wordRafTick() {
   wordRafId = null;
   if (playbackPaused) return;
-  const t = lastPlaybackTime + (performance.now() - lastPlaybackWall) / 1000;
+  const t =
+    lastPlaybackTime + (performance.now() - lastPlaybackWall) / 1000 + LYRIC_LEAD_SECONDS;
   const inGap = updateGapBar(t);
   const line =
     currentLineIndex >= 0 && currentLineIndex < parsedLines.length

@@ -5,7 +5,7 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.1] — 2026-07-31
+## [1.2.1] — 2026-08-01
 
 ### Added
 - **Rate Karalyr karaoke lyrics.** When the lyrics you're playing come from
@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Karalyr's own player — instead of the whole word lighting up at once.
   Words already sung hold the highlight colour, and lyrics with only line
   timing get a smooth estimated sweep across each word too.
+
+### Fixed
+- **Highlights no longer trail the vocal.** Line and word highlights now fire
+  50 ms ahead of the playback clock, compensating for word timings that land
+  slightly late and for the screen painting a frame behind the audio. Pausing
+  and scrubbing stay exact.
 
 ## [1.2.0] — 2026-07-28
 
