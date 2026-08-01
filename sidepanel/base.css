@@ -6,7 +6,7 @@
 
 body {
   width: 320px;
-  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif;
   background: #0b0e1a;
   color: #e0e4f0;
   overflow: hidden;

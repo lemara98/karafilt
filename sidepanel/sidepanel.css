@@ -11,7 +11,7 @@ html, body {
 }
 
 body {
-  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif;
   background: #0b0e1a;
   color: #e0e4f0;
   position: relative;
@@ -310,7 +310,7 @@ header {
      colours the active line + currently-sung word. */
   --lyrics-font-scale: 1;
   --lyrics-highlight: #c084fc;
-  font-family: var(--lyrics-font-family, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif);
+  font-family: var(--lyrics-font-family, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif);
   height: 100%;
   position: relative; /* anchors absolutely-positioned children (gap bar) */
   overflow-y: auto;
@@ -331,7 +331,9 @@ header {
 
 .line {
   font-size: calc(15px * var(--lyrics-font-scale, 1));
-  line-height: 1.5;
+  /* 1.7, not 1.5: Devanagari matras and stacked Thai tone marks are taller
+     than Latin and clip against the neighbor lines at 1.5. */
+  line-height: 1.7;
   padding: 8px 12px;
   color: #8b90b0;
   text-align: center;
@@ -342,7 +344,11 @@ header {
   transition: opacity 0.35s, color 0.35s, background 0.35s, border-color 0.35s, box-shadow 0.35s;
   border-radius: 8px;
   margin: 3px 8px;
-  word-break: break-word;
+  /* Not word-break: break-word — that can split inside a Thai/Khmer grapheme
+     cluster. Segmented word spans supply the break points; this only guards
+     pathological unbroken strings. */
+  overflow-wrap: anywhere;
+  line-break: normal;
 }
 
 /* Neighbor lines (within 1-2 of active) are more readable */

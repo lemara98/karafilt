@@ -486,18 +486,22 @@ function makeLineEl(line, index) {
   div.className = "line";
   div.dir = "auto"; // per-line bidi: RTL scripts (Arabic/Hebrew/…) auto-detected
   div.dataset.index = String(index);
-  // Split into word + whitespace tokens so each word can be styled individually
-  // for karaoke highlighting. Whitespace stays as plain text nodes so wrapping
-  // behaves naturally.
-  const tokens = (line.text || "").split(/(\s+)/);
+  // Word + separator tokens (shared/line-tokens.js): measured word lists map
+  // 1:1 onto spans (Chinese char-words sweep per character), unspaced scripts
+  // without timing get dictionary segmentation, Latin keeps the classic
+  // whitespace split. Separators stay plain text nodes so wrapping behaves.
+  const tokens = KarafiltLineTokens.lineTokens(
+    line.text || "",
+    line.words ? line.words.map((w) => w.text) : null
+  );
   for (const tok of tokens) {
-    if (!tok) continue;
-    if (/^\s+$/.test(tok)) {
-      div.appendChild(document.createTextNode(tok));
+    if (!tok.text) continue;
+    if (!tok.isWord) {
+      div.appendChild(document.createTextNode(tok.text));
     } else {
       const span = document.createElement("span");
       span.className = "word upcoming";
-      span.textContent = tok;
+      span.textContent = tok.text;
       div.appendChild(span);
     }
   }
@@ -1123,11 +1127,16 @@ if (karaokeToggle) {
 // User-tunable look of the lyrics. Applied as CSS variables on #lines and
 // persisted in chrome.storage.local. Side panel only — the popup shows no
 // lyrics. "Default" font clears the override so the CSS default stack wins.
+// Every stack ends in system fonts for Devanagari/Tamil/Thai/CJK so picking
+// Serif/Rounded/Mono on non-Latin lyrics degrades to a clean sans fallback
+// instead of per-glyph tofu with jumping line heights.
+const SCRIPT_FALLBACKS =
+  '"Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC"';
 const FONT_STACKS = {
   default: "",
-  serif: 'Georgia, "Times New Roman", serif',
-  rounded: '"Trebuchet MS", "Segoe UI", Verdana, sans-serif',
-  mono: '"SF Mono", "Fira Code", "Cascadia Code", monospace',
+  serif: `Georgia, "Times New Roman", ${SCRIPT_FALLBACKS}, serif`,
+  rounded: `"Trebuchet MS", "Segoe UI", Verdana, ${SCRIPT_FALLBACKS}, sans-serif`,
+  mono: `"SF Mono", "Fira Code", "Cascadia Code", ${SCRIPT_FALLBACKS}, monospace`,
 };
 const APPEARANCE_DEFAULTS = {
   lyricsFont: "default",
