@@ -10,8 +10,14 @@ Everything to paste into the CWS developer dashboard. Build the zip with
 > authentication data was used; both are no longer true.
 
 Still needed before submitting (manual):
-- [ ] 3–5 screenshots, 1280×800 — RE-CAPTURE: the UI changed (no AI modes, no
-      toolbar popup, a sign-in gate, simplified settings). See runbook below.
+- [ ] 3–5 screenshots, 1280×800 — **RE-CAPTURE.** The four in `store-assets/`
+      are from 2026-06-12, correctly sized but three releases out of date: they
+      show the old teal panel instead of the purple brand, an `LRCLIB [SYNCED]`
+      badge that no longer exists (branding dropped outside docs), 1–5 star
+      rating instead of 👍/👎, and none of the count-in, word sweep or Karalyr
+      word-sync badge. For a 1.3.0 listing they also miss the entire point of
+      the release: no non-Latin lyrics are visible in any of them.
+      See runbook below.
 - [x] Small promo tile: `store-assets/promo-tile-440x280.png`
 - [x] Marquee (optional but used for feature placement): `store-assets/marquee-1400x560.png`
 - [x] Privacy policy live at `https://karafilt.com/privacy`
@@ -28,7 +34,7 @@ can't capture it), drop them in `store-assets/raw/`, then ask Claude to
 crop/scale them to exact spec into `store-assets/`.
 
 **Prep (5 min):**
-- Build + load what ships: `scripts/package.sh && unzip -o dist/karafilt-0.2.0.zip -d /tmp/karafilt-pkg`
+- Build + load what ships: `scripts/package.sh && unzip -o dist/karafilt-1.3.0.zip -d /tmp/karafilt-pkg`
   → `chrome://extensions` → Load unpacked → `/tmp/karafilt-pkg`.
 - Use a CLEAN browser surface: fresh Chrome profile (or at least hide the
   bookmarks bar, close other tabs) and a YouTube session that is **signed out
@@ -38,11 +44,12 @@ crop/scale them to exact spec into `store-assets/`.
   (the default Website URL points there). Otherwise the panel shows the
   full-panel "Sign in to Karafilt" gate instead of the controls.
 - All three modes run locally, so any of them is fine to show running.
-- Songs with reliable synced LRCLib lyrics: mainstream chart hits work —
-  e.g. The Weeknd "Blinding Lights", Adele "Someone Like You", Queen
-  "Bohemian Rhapsody". Verify the panel badge says "(synced)" before shooting.
+- Songs with reliable synced lyrics: mainstream chart hits work — e.g. The
+  Weeknd "Blinding Lights", Adele "Someone Like You", Queen "Bohemian
+  Rhapsody". Verify the panel badge says "(synced)" before shooting; a
+  `word-sync` badge is better still, since that is the differentiator.
 
-**The 4 shots** (click the icon on the music tab to open the side panel, then
+**The 5 shots** (click the icon on the music tab to open the side panel, then
 press Start Filtering):
 1. **Hero:** YouTube music video playing + side panel with synced lyrics,
    current line highlighted mid-song, filter running (status "Filtering").
@@ -53,6 +60,16 @@ press Start Filtering):
    (Strong) / Basic (Fast) — all three free, in-browser.
 4. **Alternatives picker:** the "other matches" dropdown open on a song with
    several versions (synced badges visible) — shows the user stays in control.
+5. **Non-Latin lyrics** (new in 1.3.0, and the reason the market listings
+   exist): the panel mid-song on a Hindi or Chinese track, script rendering
+   cleanly with the sweep partway through a line. Karalyr dev has test tracks
+   #34 (hi) and #35 (zh) if you need a guaranteed word-synced one.
+
+**Per-language listings:** CWS stores screenshots per language too. Shot 5 in
+the market's own script (Hindi shot on the `hi` listing, Traditional Chinese on
+`zh_TW`) is worth far more there than the English hero — it answers "does this
+work for *my* music?" in one glance. Same capture workflow, one extra shot per
+language you publish.
 
 **After capturing:** drop the raw files in `store-assets/raw/`, tell Claude
 which raw file maps to which shot, and the exact-size 1280×800 finals will be
@@ -92,6 +109,10 @@ produced for upload.
 >   karaoke mix), and Basic (fast center-channel cancellation)
 > • Synced lyrics with karaoke highlighting, from LRCLib (with Lyrics.ovh and
 >   Genius fallbacks) — including a focus mode that shows the current lines big
+> • Lyrics in your own script: Hindi, Tamil, Thai, Vietnamese, Chinese, Japanese
+>   and Korean render properly, and the word sweep splits Thai and Chinese lines
+>   into real words. Songs are also matched under Indian, Southeast Asian and
+>   Chinese title conventions (Full Video Song, Lyrical, Vietsub, OST, 【官方MV】)
 > • Pick the right match when a song has multiple versions
 > • Vocal/instrumental mix slider — keep a hint of the original vocal as a guide
 > • Works on any site that plays audio
@@ -187,7 +208,13 @@ karafilt.com) — no code is fetched or executed.
 ## Versioning note
 
 The store rejects an update whose `manifest.json` `"version"` is not higher
-than the currently published one. This build is `1.2.0` (replaces the 1–5 star
-filter rating with a like/dislike vote; YouTube badges now show the community
-like share). If `1.2.0` or higher is ever already live, bump again before
-zipping.
+than the currently published one. This build is `1.3.0` (non-Latin script
+support: rendering, word segmentation and song matching for India / Southeast
+Asia / Chinese-speaking markets - see CHANGELOG). If `1.3.0` or higher is ever
+already live, bump again before zipping.
+
+**Localized listings:** the store listing text can be translated per language
+in the CWS dashboard (Store listing -> language selector -> add language).
+Drafts live in `docs/store-listings/`. See `docs/TRANSLATING.md` for the
+review process - do not publish a machine-translated listing that no native
+speaker has read.
