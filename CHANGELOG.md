@@ -5,6 +5,33 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-08-03
+
+### Added
+- **Lyrics in your own script.** Hindi, Tamil, Thai, Vietnamese, Chinese,
+  Japanese and Korean lyrics now render properly instead of showing empty
+  boxes: the panel falls back to your system's script fonts in every font
+  choice (sans, serif, rounded, mono).
+- **The word sweep works in scripts that don't use spaces.** Thai, Chinese and
+  Japanese lines are split into real words instead of glowing as one block,
+  and Chinese lyrics timed per character sweep character by character.
+- **Songs are found under Indian, Southeast Asian and Chinese title
+  conventions.** Titles carrying "Full Video Song", "Lyrical", "Audio
+  Jukebox", "Vietsub", "OST", "Karaoke Beat", "Official MV" or Chinese
+  bracket tags such as 【官方MV】 and 「完整版」 now match their lyrics.
+  Titles written entirely in Devanagari, Thai or Han script used to match
+  nothing at all - they now match.
+- **The "search Google for lyrics" fallback searches in the song's own
+  language** (गाने के बोल, เนื้อเพลง, 歌詞, lời bài hát), picked from the
+  song's script.
+
+### Fixed
+- Tall marks in Devanagari and Thai are no longer clipped by the lyric line
+  spacing, and a long word can no longer break in the middle of a Thai
+  cluster.
+
+Note: the extension's own interface stays in English.
+
 ## [1.2.2] — 2026-08-01
 
 ### Fixed
