@@ -18,7 +18,12 @@
   body{
     background:var(--bg0);
     color:var(--ink);
-    font-family:"Space Grotesk",-apple-system,Segoe UI,Roboto,sans-serif;
+    /* Latin first, then system fallbacks for the market scripts the reel is
+       re-captioned into (see COPY below) - nothing is bundled. */
+    font-family:"Space Grotesk",-apple-system,Segoe UI,Roboto,
+      "Noto Sans Devanagari","Noto Sans Tamil","Noto Sans Thai",
+      "Microsoft JhengHei","PingFang TC","Noto Sans CJK TC","Noto Sans TC",
+      sans-serif;
     overflow:hidden;
     display:grid;place-items:center;
   }
@@ -137,16 +142,16 @@
       <svg class="eq" viewBox="0 0 90 100" id="eq1"></svg>
       <div class="wm">karafilt<span class="dot">.</span></div>
     </div>
-    <div class="tagline">Turn any tab into a <b>karaoke machine.</b></div>
+    <div class="tagline" data-t="tagline">Turn any tab into a <b>karaoke machine.</b></div>
   </section>
 
   <!-- SCENE 2 -->
   <section class="scene" id="s2">
     <div class="wrap">
-      <h2>The vocals drop out.<br>The <span class="grad">music stays.</span></h2>
+      <h2 data-t="vocalsOut">The vocals drop out.<br>The <span class="grad">music stays.</span></h2>
       <div class="vis">
         <canvas id="vcanvas" width="980" height="200"></canvas>
-        <div class="chip">🎤 vocals removed · in real time</div>
+        <div class="chip" data-t="chip">🎤 vocals removed · in real time</div>
       </div>
     </div>
   </section>
@@ -156,9 +161,9 @@
     <div class="panel">
       <div class="head"><svg class="eq" style="width:40px;height:30px" viewBox="0 0 90 100" id="eq3"></svg>
         <span>karafilt<span style="color:var(--p2)">.</span></span>
-        <span class="badge">synced</span>
+        <span class="badge" data-t="badge">synced</span>
       </div>
-      <div class="lyrics">
+      <div class="lyrics" id="lyrics">
         <div class="line"><span class="base">Is this the real life?</span><span class="fill">Is this the real life?</span></div>
         <div class="line"><span class="base">Is this just fantasy?</span><span class="fill">Is this just fantasy?</span></div>
         <div class="line"><span class="base">Caught in a landslide</span><span class="fill">Caught in a landslide</span></div>
@@ -171,10 +176,10 @@
   <!-- SCENE 4 -->
   <section class="scene" id="s4">
     <div class="grid">
-      <div class="card"><div class="ic">⚡</div><div><div class="t">Real-time vocal removal</div><div class="d">Strips the lead vocal as the song plays</div></div></div>
-      <div class="card"><div class="ic">🎶</div><div><div class="t">Synced karaoke lyrics</div><div class="d">Word-by-word highlight, in a focus view</div></div></div>
-      <div class="card"><div class="ic">🔒</div><div><div class="t">100% in-browser — free</div><div class="d">WebAssembly DSP, audio never leaves your machine</div></div></div>
-      <div class="card"><div class="ic">🌐</div><div><div class="t">Works on any site</div><div class="d">YouTube, Spotify Web, SoundCloud — anywhere</div></div></div>
+      <div class="card"><div class="ic">⚡</div><div><div class="t" data-t="f1t">Real-time vocal removal</div><div class="d" data-t="f1d">Strips the lead vocal as the song plays</div></div></div>
+      <div class="card"><div class="ic">🎶</div><div><div class="t" data-t="f2t">Synced karaoke lyrics</div><div class="d" data-t="f2d">Word-by-word highlight, in a focus view</div></div></div>
+      <div class="card"><div class="ic">🔒</div><div><div class="t" data-t="f3t">100% in-browser — free</div><div class="d" data-t="f3d">WebAssembly DSP, audio never leaves your machine</div></div></div>
+      <div class="card"><div class="ic">🌐</div><div><div class="t" data-t="f4t">Works on any site</div><div class="d" data-t="f4d">YouTube, Spotify Web, SoundCloud — anywhere</div></div></div>
     </div>
   </section>
 
@@ -185,9 +190,9 @@
         <svg class="eq" viewBox="0 0 90 100" id="eq5"></svg>
         <div class="wm">karafilt<span class="dot">.</span></div>
       </div>
-      <h2>Turn any tab into a <span class="grad">karaoke machine.</span></h2>
-      <div class="sub">Sign in, hit play, and sing. Free.</div>
-      <div class="btn">Start Filtering</div>
+      <h2 data-t="cta">Turn any tab into a <span class="grad">karaoke machine.</span></h2>
+      <div class="sub" data-t="sub">Sign in, hit play, and sing. Free.</div>
+      <div class="btn" data-t="btn">Start Filtering</div>
       <div class="url">karafilt.com</div>
     </div>
   </section>
@@ -289,6 +294,110 @@ function runLyrics(){
     },i*1000));
   });
 }
+
+/* ---- market captions ----------------------------------------------------
+   Open the reel with ?lang=hi (or vi, id, fil, zh_TW) to render the same
+   animation with that market's captions. English lives in the markup above
+   and is the source of truth; each block below only overrides what it names.
+
+   All of these are MACHINE-TRANSLATED DRAFTS awaiting a native speaker -
+   see docs/TRANSLATING.md. Do not publish a re-captioned reel that hasn't
+   been read by one.
+
+   Two things stay in English on purpose: the "Start Filtering" button (it is
+   the literal label in the extension's English UI - translating it in an ad
+   would be a lie) and the product name.
+
+   The scene-3 lyric lines are written for this reel, not taken from a real
+   song, so a re-captured reel carries no lyric rights. */
+const COPY = {
+  hi: {
+    htmlLang: "hi",
+    tagline: 'किसी भी टैब को <b>कराओके मशीन</b> बनाइए।',
+    vocalsOut: 'आवाज़ चली जाती है।<br><span class="grad">म्यूज़िक रह जाता है।</span>',
+    chip: '🎤 आवाज़ हटी · रियल टाइम में',
+    badge: 'सिंक',
+    lyrics: ['आज की रात गाना है', 'सुर मेरा, ताल तेरा', 'जो दिल में है, वो होंठों पर', 'चलो साथ में गाएँ'],
+    f1t: 'रियल-टाइम वोकल रिमूवल', f1d: 'गाना चलते-चलते आवाज़ हट जाती है',
+    f2t: 'सिंक किए हुए बोल', f2d: 'शब्द-दर-शब्द हाइलाइट, फ़ोकस व्यू में',
+    f3t: '100% ब्राउज़र में - मुफ़्त', f3d: 'ऑडियो कभी आपके कंप्यूटर से बाहर नहीं जाता',
+    f4t: 'हर साइट पर चलता है', f4d: 'YouTube, Spotify Web, SoundCloud',
+    cta: 'किसी भी टैब को <span class="grad">कराओके मशीन</span> बनाइए।',
+    sub: 'साइन इन कीजिए, प्ले दबाइए, और गाइए। मुफ़्त।',
+  },
+  vi: {
+    htmlLang: "vi",
+    tagline: 'Biến bất kỳ tab nào thành <b>dàn karaoke.</b>',
+    vocalsOut: 'Giọng hát biến mất.<br><span class="grad">Nhạc vẫn còn.</span>',
+    chip: '🎤 đã xóa giọng hát · theo thời gian thực',
+    badge: 'đồng bộ',
+    lyrics: ['Đêm nay mình cùng hát', 'Nhịp của em, lời của anh', 'Điều trong tim thành tiếng', 'Hát lên, hát cùng nhau'],
+    f1t: 'Xóa giọng hát tức thì', f1d: 'Tách giọng chính ngay khi nhạc đang phát',
+    f2t: 'Lời nhạc đồng bộ', f2d: 'Sáng từng chữ, có chế độ focus',
+    f3t: '100% trong trình duyệt - miễn phí', f3d: 'Âm thanh không bao giờ rời khỏi máy bạn',
+    f4t: 'Chạy trên mọi trang', f4d: 'YouTube, Spotify Web, SoundCloud',
+    cta: 'Biến bất kỳ tab nào thành <span class="grad">dàn karaoke.</span>',
+    sub: 'Đăng nhập, bật nhạc, và hát. Miễn phí.',
+  },
+  id: {
+    htmlLang: "id",
+    tagline: 'Ubah tab apa pun jadi <b>mesin karaoke.</b>',
+    vocalsOut: 'Vokalnya hilang.<br><span class="grad">Musiknya tetap.</span>',
+    chip: '🎤 vokal dihapus · real-time',
+    badge: 'tersinkron',
+    lyrics: ['Malam ini kita bernyanyi', 'Iramamu, liriknya milikku', 'Yang di hati jadi suara', 'Ayo nyanyi bersama'],
+    f1t: 'Hapus vokal real-time', f1d: 'Vokal utama hilang saat lagunya jalan',
+    f2t: 'Lirik tersinkron', f2d: 'Sorotan per kata, ada mode fokus',
+    f3t: '100% di browser - gratis', f3d: 'Audionya tidak pernah keluar dari perangkatmu',
+    f4t: 'Jalan di semua situs', f4d: 'YouTube, Spotify Web, SoundCloud',
+    cta: 'Ubah tab apa pun jadi <span class="grad">mesin karaoke.</span>',
+    sub: 'Masuk, putar lagunya, lalu nyanyi. Gratis.',
+  },
+  fil: {
+    htmlLang: "fil",
+    tagline: 'Gawing <b>videoke machine</b> ang kahit anong tab.',
+    vocalsOut: 'Nawawala ang boses.<br><span class="grad">Nananatili ang musika.</span>',
+    chip: '🎤 tanggal ang boses · real time',
+    badge: 'naka-sync',
+    lyrics: ['Ngayong gabi, kanta tayo', 'Tono mo, letra ko', 'Ang nasa puso, ilabas', "Halina't sabay tayo"],
+    f1t: 'Real-time vocal removal', f1d: 'Inaalis ang boses habang tumutugtog',
+    f2t: 'Naka-sync na lyrics', f2d: 'Salita-por-salitang highlight, may focus view',
+    f3t: '100% sa browser - libre', f3d: 'Hindi lumalabas ng device mo ang audio',
+    f4t: 'Gumagana sa lahat ng site', f4d: 'YouTube, Spotify Web, SoundCloud',
+    cta: 'Gawing <span class="grad">videoke machine</span> ang kahit anong tab.',
+    sub: 'Mag-sign in, i-play, at kumanta. Libre.',
+  },
+  zh_TW: {
+    htmlLang: "zh-TW",
+    tagline: '把任何分頁變成<b>卡拉OK。</b>',
+    vocalsOut: '人聲消失。<br><span class="grad">音樂還在。</span>',
+    chip: '🎤 人聲已消除 · 即時',
+    badge: '同步',
+    lyrics: ['今晚一起唱', '你的節拍，我的詞', '心裡的話唱出來', '來，一起開口'],
+    f1t: '即時去人聲', f1d: '歌曲播放時直接消除主唱',
+    f2t: '同步歌詞', f2d: '逐字亮起，還有專注模式',
+    f3t: '100% 在瀏覽器內 - 免費', f3d: '音訊從不離開你的電腦',
+    f4t: '任何網站都能用', f4d: 'YouTube、Spotify Web、SoundCloud',
+    cta: '把任何分頁變成<span class="grad">卡拉OK。</span>',
+    sub: '登入、播放，開唱。免費。',
+  },
+};
+(function applyCopy(){
+  const lang = new URLSearchParams(location.search).get('lang');
+  const t = lang && COPY[lang];
+  if(!t) return;                        // unknown or absent -> English markup
+  document.documentElement.lang = t.htmlLang || lang;
+  document.querySelectorAll('[data-t]').forEach(el=>{
+    const v = t[el.dataset.t];
+    if(v != null) el.innerHTML = v;
+  });
+  if(t.lyrics){
+    document.getElementById('lyrics').innerHTML = t.lyrics.map(line=>{
+      const esc = line.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+      return `<div class="line"><span class="base">${esc}</span><span class="fill">${esc}</span></div>`;
+    }).join('');
+  }
+})();
 
 /* ---- scene controller ---- */
 const scenes=[

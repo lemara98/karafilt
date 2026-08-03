@@ -3,11 +3,33 @@
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
-const { chromium } = require('/opt/node22/lib/node_modules/playwright');
+// Playwright is not a dependency of this repo (it has none) - it is picked up
+// from wherever it happens to be installed. PLAYWRIGHT_PATH overrides.
+const { chromium } = (() => {
+  const candidates = [
+    process.env.PLAYWRIGHT_PATH,
+    'playwright',
+    '/opt/node22/lib/node_modules/playwright',
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try { return require(c); } catch { /* try the next one */ }
+  }
+  throw new Error(
+    'playwright not found. Install it (npm i -g playwright) or run with\n' +
+    '  PLAYWRIGHT_PATH=/path/to/node_modules/playwright node marketing/tools/capture.js'
+  );
+})();
 const { encodeGIF } = require('./gifenc.js');
 
 const DIR = path.resolve(__dirname, '..');
-const OUT = path.join(DIR, 'preview');
+
+// Optional market re-caption: `node capture.js --lang=hi` renders the reel with
+// that language's captions (see the COPY map in karafilt-reel.html) and writes
+// to preview/<lang>/. Without the flag, English into preview/ as before.
+// The logo is language-independent and is only produced for the English run.
+const LANG = (process.argv.find(a => a.startsWith('--lang=')) || '').slice(7);
+const OUT = LANG ? path.join(DIR, 'preview', LANG) : path.join(DIR, 'preview');
+const REEL = 'file://' + path.join(DIR, 'karafilt-reel.html') + (LANG ? `?lang=${LANG}` : '');
 fs.mkdirSync(OUT, { recursive: true });
 
 // ---- tiny PNG decoder (8-bit, color type 2/6) -> {width,height,data:RGBA} ----
@@ -83,7 +105,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     recordVideo: { dir: OUT, size: { width: 1280, height: 720 } },
   });
   const pv = await ctxV.newPage();
-  await pv.goto('file://' + path.join(DIR, 'karafilt-reel.html'));
+  await pv.goto(REEL);
   await sleep(23000); // one full loop (~22s) + margin
   await pv.close();
   await ctxV.close();
@@ -96,21 +118,24 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   const page = await ctx.newPage();
 
-  // Logo GIF (short, clean loop) — from the animated SVG
-  await page.goto('file://' + path.join(DIR, 'logo-animated.svg'));
-  await sleep(400);
-  const logoFrames = [];
-  const LOGO_N = 36, LOGO_MS = 70; // ~2.5s @ ~14fps
-  for (let i = 0; i < LOGO_N; i++) {
-    const png = decodePNG(await page.screenshot({ clip: { x: 0, y: 0, width: 528, height: 120 } }));
-    logoFrames.push(downscale(png, 440, 100));
-    await sleep(LOGO_MS);
+  // Logo GIF (short, clean loop) — from the animated SVG. No text in it, so
+  // the English run is the only one that needs to produce it.
+  if (!LANG) {
+    await page.goto('file://' + path.join(DIR, 'logo-animated.svg'));
+    await sleep(400);
+    const logoFrames = [];
+    const LOGO_N = 36, LOGO_MS = 70; // ~2.5s @ ~14fps
+    for (let i = 0; i < LOGO_N; i++) {
+      const png = decodePNG(await page.screenshot({ clip: { x: 0, y: 0, width: 528, height: 120 } }));
+      logoFrames.push(downscale(png, 440, 100));
+      await sleep(LOGO_MS);
+    }
+    fs.writeFileSync(path.join(OUT, 'logo.gif'), encodeGIF(logoFrames, { delayCs: 7, loop: 0 }));
+    console.log('logo.gif done', logoFrames.length, 'frames');
   }
-  fs.writeFileSync(path.join(OUT, 'logo.gif'), encodeGIF(logoFrames, { delayCs: 7, loop: 0 }));
-  console.log('logo.gif done', logoFrames.length, 'frames');
 
   // Reel GIF (downscaled, ~9fps over one loop)
-  await page.goto('file://' + path.join(DIR, 'karafilt-reel.html'));
+  await page.goto(REEL);
   await sleep(300);
   const reelFrames = [];
   const REEL_N = 150, REEL_MS = 150; // ~22.5s @ ~6.6fps
@@ -124,7 +149,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   // A couple of full-res stills for slides
   const stills = [800, 5200, 9800, 14400, 18800];
-  await page.goto('file://' + path.join(DIR, 'karafilt-reel.html'));
+  await page.goto(REEL);
   let last = 0;
   for (let k = 0; k < stills.length; k++) {
     await sleep(stills[k] - last); last = stills[k];

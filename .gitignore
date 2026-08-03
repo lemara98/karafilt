@@ -26,3 +26,10 @@ Thumbs.db
 
 # Raw screenshot captures (contain unredacted personal info)
 store-assets/raw/
+
+# Localized reel previews: the WebM and GIF regenerate from karafilt-reel.html
+# in ~90s per language (marketing/tools/capture.js --lang=xx), and five of them
+# would be ~30MB of derived binaries. The stills are kept - they are what goes
+# into store listings and posts.
+marketing/preview/*/karafilt-reel.webm
+marketing/preview/*/reel.gif

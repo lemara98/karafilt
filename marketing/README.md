@@ -28,14 +28,42 @@ logo, the purple gradient (`#8b7cff → #b46cff`), and the product taglines.
 - `karafilt-reel.webm` — full-quality video for slides/keynote.
 - `still-1…5.png` — full-res frames, one per scene, for static slides.
 
+## Market versions
+
+The same reel renders with another market's captions via a query parameter:
+
+```
+karafilt-reel.html?lang=hi     # also vi, id, fil, zh_TW
+```
+
+The caption sets live in the `COPY` map near the bottom of
+`karafilt-reel.html`; English lives in the markup and is the source of truth.
+Two things stay English everywhere on purpose: the product name and the
+"Start Filtering" button, which is the literal label in the extension's
+English UI. Scene 3's localized lyrics are lines written for the reel, not
+taken from a real song.
+
+**All caption sets are machine-translated drafts awaiting a native speaker** —
+see [`../docs/TRANSLATING.md`](../docs/TRANSLATING.md). Don't publish one that
+hasn't been read.
+
 ## Regenerating
 
 ```bash
-node marketing/tools/capture.js
+node marketing/tools/capture.js              # English  -> preview/
+node marketing/tools/capture.js --lang=hi    # a market -> preview/hi/
 ```
 
-Requires Chromium available to Playwright (preconfigured in this environment via
-`PLAYWRIGHT_BROWSERS_PATH`). Outputs land in `marketing/preview/`.
+Requires Chromium available to Playwright. The script picks Playwright up from
+wherever it is installed; if it can't find it, point it at one:
+
+```bash
+PLAYWRIGHT_PATH=/path/to/node_modules/playwright node marketing/tools/capture.js
+```
+
+Each language run writes ~5 MB (WebM + GIF + 5 stills), so think before
+committing all of them. The logo GIF is language-independent and is only
+produced by the English run.
 
 To change copy, scenes, timing, or colors, edit `karafilt-reel.html` — the scene
 list and durations are in the `scenes` array near the bottom; brand colors are
