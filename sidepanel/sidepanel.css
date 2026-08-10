@@ -11,7 +11,10 @@ html, body {
 }
 
 body {
-  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif;
+  /* Latin-coverage faces (Noto Sans … Arial) before the script fonts, or a
+     Linux box without Segoe/Roboto lets "Noto Sans CJK TC" render Latin and
+     break š/ć/č into detached marks. */
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans", "Liberation Sans", "DejaVu Sans", Arial, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif;
   background: #0b0e1a;
   color: #e0e4f0;
   position: relative;
@@ -310,7 +313,7 @@ header {
      colours the active line + currently-sung word. */
   --lyrics-font-scale: 1;
   --lyrics-highlight: #c084fc;
-  font-family: var(--lyrics-font-family, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif);
+  font-family: var(--lyrics-font-family, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans", "Liberation Sans", "DejaVu Sans", Arial, "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif);
   height: 100%;
   position: relative; /* anchors absolutely-positioned children (gap bar) */
   overflow-y: auto;

@@ -1144,11 +1144,16 @@ if (karaokeToggle) {
 // instead of per-glyph tofu with jumping line heights.
 const SCRIPT_FALLBACKS =
   '"Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Thai", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC"';
+// Broad-coverage Latin faces must sit BEFORE the script fallbacks: when the
+// preferred faces are missing (common on Linux), "Noto Sans CJK TC" would
+// otherwise claim Latin text too, and it draws š/ć/č as detached marks on
+// the wrong letter. One Latin safety net per style, so the degradation keeps
+// the chosen look.
 const FONT_STACKS = {
   default: "",
-  serif: `Georgia, "Times New Roman", ${SCRIPT_FALLBACKS}, serif`,
-  rounded: `"Trebuchet MS", "Segoe UI", Verdana, ${SCRIPT_FALLBACKS}, sans-serif`,
-  mono: `"SF Mono", "Fira Code", "Cascadia Code", ${SCRIPT_FALLBACKS}, monospace`,
+  serif: `Georgia, "Times New Roman", "Liberation Serif", "DejaVu Serif", ${SCRIPT_FALLBACKS}, serif`,
+  rounded: `"Trebuchet MS", "Segoe UI", Verdana, "Liberation Sans", "DejaVu Sans", ${SCRIPT_FALLBACKS}, sans-serif`,
+  mono: `"SF Mono", "Fira Code", "Cascadia Code", "Liberation Mono", "DejaVu Sans Mono", ${SCRIPT_FALLBACKS}, monospace`,
 };
 const APPEARANCE_DEFAULTS = {
   lyricsFont: "default",

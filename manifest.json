@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Karafilt",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "minimum_chrome_version": "111",
   "description": "Real-time vocal removal for karaoke — removes vocals from any tab audio",
   "permissions": ["tabCapture", "offscreen", "activeTab", "tabs", "storage", "sidePanel", "scripting", "contextMenus", "alarms"],

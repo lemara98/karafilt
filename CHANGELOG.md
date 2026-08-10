@@ -5,6 +5,17 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-08-10
+
+### Fixed
+- **Accented Latin letters (š, ć, č, …) render correctly on Linux again.**
+  On systems without Segoe UI or Roboto, the CJK fallback font ("Noto Sans
+  CJK TC") was claiming Latin text and drawing accents as detached marks on
+  the wrong letter. Broad-coverage Latin faces (Noto Sans, Liberation,
+  DejaVu, Arial) now sit before the script fallbacks in every font stack —
+  panel UI, lyrics area, and all four lyric font choices (sans, serif,
+  rounded, mono).
+
 ## [1.3.0] - 2026-08-03
 
 ### Added
