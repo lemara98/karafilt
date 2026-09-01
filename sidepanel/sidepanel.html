@@ -60,6 +60,16 @@
       </div>
     </header>
 
+    <!-- View tabs: Lyrics is the panel's job; Me and Playlists are side
+         screens. sidepanel.js swaps .view-active and snaps back to Lyrics
+         when a new song starts so stats can never cover the words mid-song. -->
+    <nav class="view-tabs" role="tablist">
+      <button class="view-tab view-tab-active" data-view="lyrics" role="tab" aria-selected="true">Lyrics</button>
+      <button class="view-tab" data-view="playlists" role="tab" aria-selected="false">Playlists</button>
+      <button class="view-tab" data-view="me" role="tab" aria-selected="false">Me</button>
+    </nav>
+
+    <div class="view view-active" id="view-lyrics">
     <div class="status" id="status">Waiting for media...</div>
 
     <!-- Alternative LRCLib matches the search returned. Hidden until the
@@ -94,6 +104,60 @@
       </svg>
       <span>Search lyrics on Google</span>
     </button>
+    </div>
+
+    <!-- Me: stats, scoreboard position and achievements. sidepanel.js fills
+         it from GET_MY_STATS (service worker → /api/me/stats, cookie session). -->
+    <div class="view" id="view-me">
+      <div class="view-scroll">
+        <div class="me-loading" id="me-loading">Loading your stats…</div>
+        <div class="me-error" id="me-error" style="display:none">
+          <span id="me-error-text">Couldn't load your stats.</span>
+          <button id="me-retry" class="pl-mini-btn">Retry</button>
+        </div>
+        <div id="me-content" style="display:none">
+          <div class="me-name" id="me-name"></div>
+          <div class="stat-grid">
+            <div class="stat-card"><span class="stat-val" id="me-time">—</span><span class="stat-sub">time sung</span></div>
+            <div class="stat-card"><span class="stat-val" id="me-songs">—</span><span class="stat-sub">unique songs</span></div>
+            <div class="stat-card"><span class="stat-val" id="me-sessions">—</span><span class="stat-sub">sessions</span></div>
+          </div>
+          <div class="me-section-title">Scoreboard</div>
+          <div class="rank-row"><span class="rank-period">This month</span><span class="rank-pos" id="me-rank-month">—</span></div>
+          <div class="rank-row"><span class="rank-period">All time</span><span class="rank-pos" id="me-rank-all">—</span></div>
+          <a class="me-link" href="https://karafilt.com/hall-of-fame" target="_blank" rel="noopener noreferrer">See the Hall of Fame ↗</a>
+          <div class="me-section-title">Achievements <span class="me-ach-count" id="me-ach-count"></span></div>
+          <div class="badge-grid" id="me-badges"></div>
+          <div class="me-next" id="me-next"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Playlists: named local lists (shared/playlists.js). The top card adds
+         whatever is playing on the bound tab; entries reopen their URL there. -->
+    <div class="view" id="view-playlists">
+      <div class="view-scroll">
+        <div class="pl-current">
+          <div class="pl-current-song" id="pl-current-song">Nothing playing</div>
+          <div class="pl-add-row">
+            <button id="pl-add-btn" class="pl-add-btn" disabled>+ Add to <span id="pl-add-target">playlist</span></button>
+            <button id="pl-add-pick" class="pl-mini-btn" title="Add to a different playlist" disabled>▾</button>
+          </div>
+          <div class="pl-pick-menu" id="pl-pick-menu" style="display:none"></div>
+          <span class="hint" id="pl-add-status"></span>
+        </div>
+        <div class="pl-head">
+          <span class="me-section-title">Your playlists</span>
+          <button id="pl-new-btn" class="pl-mini-btn">+ New</button>
+        </div>
+        <div class="pl-new-form" id="pl-new-form" style="display:none">
+          <input type="text" id="pl-new-name" class="text-input" maxlength="60" placeholder="Playlist name">
+          <button id="pl-new-create" class="pl-mini-btn">Create</button>
+        </div>
+        <div class="pl-lists" id="pl-lists"></div>
+        <p class="pl-empty" id="pl-empty">No playlists yet — create one and add the songs you love to sing.</p>
+      </div>
+    </div>
 
     <!-- Filter control surface — same layout as the popup. When the side panel
          is open, the user shouldn't need to touch the popup at all. -->
@@ -242,6 +306,7 @@
   <script src="../shared/song-match.js"></script>
   <script src="../shared/line-tokens.js"></script>
   <script src="../shared/video-key.js"></script>
+  <script src="../shared/playlists.js"></script>
   <script src="../shared/fancy-select.js"></script>
   <script src="../shared/controls-bindings.js"></script>
   <script src="sidepanel.js"></script>

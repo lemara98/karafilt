@@ -967,3 +967,465 @@ body { width: 100% !important; }
 .support-row a:hover {
   color: #c084fc;
 }
+
+/* ── View tabs (Lyrics / Me / Playlists) ─────────────────────────────────── */
+/* Class-based switching (.view-active), not [hidden]: the lyrics view needs
+   display:flex, which would defeat the hidden attribute's UA display:none. */
+
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0 0;
+  flex-shrink: 0;
+}
+
+.view-tab {
+  flex: 1;
+  padding: 6px 0 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #8b90b0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.view-tab:hover {
+  color: #c9cde0;
+}
+
+.view-tab-active {
+  color: #e0e4f0;
+  border-image: linear-gradient(90deg, #8b7cff, #c084fc) 1;
+  border-bottom: 2px solid #c084fc;
+}
+
+.view {
+  display: none;
+}
+
+/* Me and Playlists take the full height below the tab strip: the filter
+   controls and the support links belong to the lyrics screen only. (No
+   [data-view] yet — before switchView()'s first stamp — means lyrics.) */
+body[data-view="me"] .sp-controls,
+body[data-view="playlists"] .sp-controls,
+body[data-view="me"] .support-row,
+body[data-view="playlists"] .support-row {
+  display: none;
+}
+
+/* The lyrics view inherits the container's old shape: a column whose
+   .lines-wrap (flex:1) soaks up the space. */
+#view-lyrics.view-active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+#view-me.view-active,
+#view-playlists.view-active {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.view-scroll {
+  padding: 12px 2px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Me view ─────────────────────────────────────────────────────────────── */
+
+.me-loading,
+.me-error {
+  font-size: 12px;
+  color: #8b90b0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.me-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e0e4f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#me-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 4px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+
+.stat-val {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e0e4f0;
+}
+
+.stat-sub {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8b90b0;
+}
+
+.me-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b90b0;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-top: 4px;
+}
+
+.rank-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.rank-period {
+  font-size: 12px;
+  color: #c9cde0;
+}
+
+.rank-pos {
+  font-size: 13px;
+  font-weight: 700;
+  color: #c084fc;
+}
+
+.rank-pos .rank-of {
+  font-weight: 400;
+  font-size: 11px;
+  color: #8b90b0;
+}
+
+.me-link {
+  font-size: 11.5px;
+  color: #8b90b0;
+  text-decoration: none;
+}
+
+.me-link:hover {
+  color: #c084fc;
+}
+
+.me-ach-count {
+  color: #c084fc;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 8px;
+}
+
+.badge-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  text-align: center;
+}
+
+.badge-cell img {
+  width: 44px;
+  height: 44px;
+  display: block;
+}
+
+/* Unearned badges show as dimmed silhouettes so the wall reads as a set to
+   complete, not a shorter list. */
+.badge-cell.badge-locked img {
+  filter: grayscale(1) brightness(0.45);
+  opacity: 0.5;
+}
+
+.badge-cell .badge-name {
+  font-size: 9px;
+  line-height: 1.2;
+  color: #8b90b0;
+}
+
+.badge-cell.badge-earned .badge-name {
+  color: #c9cde0;
+}
+
+.me-next {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #8b90b0;
+}
+
+.me-next b {
+  color: #c9cde0;
+  font-weight: 600;
+}
+
+/* ── Playlists view ──────────────────────────────────────────────────────── */
+
+.pl-current {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pl-current-song {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e0e4f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-current-song.pl-none {
+  color: #8b90b0;
+  font-weight: 400;
+}
+
+.pl-add-row {
+  display: flex;
+  gap: 6px;
+}
+
+.pl-add-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #8b5cf6, #c084fc);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-add-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pl-mini-btn {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #c9cde0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pl-mini-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pl-mini-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pl-pick-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pl-pick-item {
+  text-align: left;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: #c9cde0;
+  background: rgba(255, 255, 255, 0.04);
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.pl-pick-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pl-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pl-new-form {
+  display: flex;
+  gap: 6px;
+}
+
+.pl-new-form .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pl-lists {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pl-card {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.pl-card.pl-active-card {
+  border-color: rgba(192, 132, 252, 0.35);
+}
+
+.pl-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pl-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e0e4f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-card-count {
+  font-size: 11px;
+  color: #8b90b0;
+  flex-shrink: 0;
+}
+
+.pl-active-star {
+  font-size: 11px;
+  color: #c084fc;
+  flex-shrink: 0;
+}
+
+.pl-card-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0 6px 8px;
+}
+
+.pl-card-tools {
+  display: flex;
+  gap: 6px;
+  padding: 0 6px 8px;
+}
+
+.pl-card-tools .pl-mini-btn {
+  padding: 4px 8px;
+  font-size: 10.5px;
+}
+
+.pl-song {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 7px;
+}
+
+.pl-song:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pl-song-open {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px 6px 8px;
+  font-size: 12px;
+  color: #c9cde0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-song-remove {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #8b90b0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.pl-song-remove:hover {
+  color: #ff6b9d;
+}
+
+.pl-song-empty {
+  padding: 4px 8px 6px;
+  font-size: 11.5px;
+  color: #8b90b0;
+}
+
+.pl-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8b90b0;
+}

@@ -962,6 +962,11 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     // Show/refresh the per-song rating widget for the current song.
     updateRatingWidget();
 
+    // Views: refresh the playlist "current song" card, and snap back to the
+    // lyrics view when a NEW song starts (stats must never cover the words
+    // mid-song).
+    notifySongMaybeChanged();
+
     // Song identified and lyrics resolved — request a word-sync right away
     // if Karalyr had nothing (all the guards live inside).
     maybeQueueWordSync(currentSongVideoKey());
@@ -1745,6 +1750,488 @@ function showWordSyncHint() {
   }, 4000);
 }
 
+
+// --- Views (Lyrics / Me / Playlists) ───────────────────────────────────────
+// Tab strip under the header. Lyrics keeps the panel's historical layout and
+// stays the default; a song CHANGE snaps back to it so the side screens can't
+// cover the words mid-song. Switching is class-based (.view-active) because
+// #view-lyrics needs display:flex (see sidepanel.css).
+
+const VIEWS = ["lyrics", "me", "playlists"];
+const viewTabEls = Array.from(document.querySelectorAll(".view-tab"));
+let activeView = "lyrics";
+// Key of the song the views last saw — notifySongMaybeChanged() compares.
+let lastViewSongKey = null;
+
+function switchView(name) {
+  if (!VIEWS.includes(name)) return;
+  activeView = name;
+  for (const tab of viewTabEls) {
+    const on = tab.dataset.view === name;
+    tab.classList.toggle("view-tab-active", on);
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  for (const v of VIEWS) {
+    const el = document.getElementById(`view-${v}`);
+    if (el) el.classList.toggle("view-active", v === name);
+  }
+  // The side screens own EVERYTHING below the tab strip — sidepanel.css hides
+  // the filter controls and support row off this attribute.
+  document.body.dataset.view = name;
+  if (name === "me") ensureMeStats(false);
+  if (name === "playlists") {
+    renderPlaylists();
+    updateCurrentSongCard();
+  }
+}
+
+for (const tab of viewTabEls) {
+  tab.addEventListener("click", () => switchView(tab.dataset.view));
+}
+
+function notifySongMaybeChanged() {
+  const key = currentSongVideoKey();
+  if (key === lastViewSongKey) return;
+  const hadSong = lastViewSongKey != null;
+  lastViewSongKey = key;
+  updateCurrentSongCard();
+  // Only an actual song-to-song change yanks the user back — the initial
+  // detection right after opening the panel shouldn't close a tab they chose.
+  if (hadSong && key && activeView !== "lyrics") switchView("lyrics");
+}
+
+// "3h 12m" / "12m" / "45s" — matches the site's fmtDuration tone.
+function fmtDur(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
+// --- Me view (GET_MY_STATS → /api/me/stats) ────────────────────────────────
+
+const meEls = {
+  loading: document.getElementById("me-loading"),
+  error: document.getElementById("me-error"),
+  errorText: document.getElementById("me-error-text"),
+  retry: document.getElementById("me-retry"),
+  content: document.getElementById("me-content"),
+  name: document.getElementById("me-name"),
+  time: document.getElementById("me-time"),
+  songs: document.getElementById("me-songs"),
+  sessions: document.getElementById("me-sessions"),
+  rankMonth: document.getElementById("me-rank-month"),
+  rankAll: document.getElementById("me-rank-all"),
+  achCount: document.getElementById("me-ach-count"),
+  badges: document.getElementById("me-badges"),
+  next: document.getElementById("me-next"),
+};
+let meStatsLoaded = false;
+let meStatsLoading = false;
+
+function ensureMeStats(force) {
+  if (meStatsLoading || (meStatsLoaded && !force)) return;
+  meStatsLoading = true;
+  meEls.error.style.display = "none";
+  if (!meStatsLoaded) meEls.loading.style.display = "";
+  chrome.runtime.sendMessage({ type: "GET_MY_STATS" }, (res) => {
+    meStatsLoading = false;
+    meEls.loading.style.display = "none";
+    if (chrome.runtime.lastError || !res || !res.ok) {
+      meEls.content.style.display = "none";
+      meEls.error.style.display = "";
+      meEls.errorText.textContent =
+        res && res.status === 401
+          ? "Sign in on karafilt.com to see your stats."
+          : "Couldn't load your stats — check your connection.";
+      return;
+    }
+    meStatsLoaded = true;
+    renderMeStats(res.stats || {});
+  });
+}
+
+if (meEls.retry) meEls.retry.addEventListener("click", () => ensureMeStats(true));
+
+function setRankCell(el, r) {
+  el.textContent = "";
+  if (!r) {
+    el.textContent = "—";
+    el.title = "No eligible singing in this period yet";
+    return;
+  }
+  el.append(`#${r.rank} `);
+  const of = document.createElement("span");
+  of.className = "rank-of";
+  of.textContent = `of ${r.totalSingers}`;
+  el.appendChild(of);
+  el.title = `${fmtDur(r.totalSeconds)} across ${r.songs} song${r.songs === 1 ? "" : "s"}`;
+}
+
+function renderMeStats(stats) {
+  meEls.content.style.display = "";
+  meEls.name.textContent = stats.displayName || stats.email || "";
+  const usage = stats.usage || {};
+  meEls.time.textContent = fmtDur(usage.totalSeconds);
+  meEls.songs.textContent = String(usage.uniqueSongs ?? 0);
+  meEls.sessions.textContent = String(usage.sessionCount ?? 0);
+  const rank = stats.rank || {};
+  setRankCell(meEls.rankMonth, rank.month);
+  setRankCell(meEls.rankAll, rank.all);
+
+  const ach = stats.achievements || {};
+  const all = Array.isArray(ach.all) ? ach.all : [];
+  meEls.achCount.textContent = all.length ? `${ach.earnedCount ?? 0} / ${all.length}` : "";
+  meEls.badges.textContent = "";
+  for (const a of all) {
+    // Badge art ships with the extension; the key doubles as the file name,
+    // so only accept the character set the catalog actually uses.
+    if (!/^[a-z0-9_]+$/.test(a.key || "")) continue;
+    const cell = document.createElement("div");
+    cell.className = `badge-cell ${a.earned ? "badge-earned" : "badge-locked"}`;
+    cell.title = `${a.name} — ${a.blurb}${a.earned ? "" : " (not earned yet)"}`;
+    const img = document.createElement("img");
+    img.src = `../icons/badges/${a.key}.svg`;
+    img.alt = "";
+    const name = document.createElement("div");
+    name.className = "badge-name";
+    name.textContent = a.name || a.key;
+    cell.append(img, name);
+    meEls.badges.appendChild(cell);
+  }
+
+  meEls.next.textContent = "";
+  const prog = ach.progress || {};
+  const parts = [];
+  if (prog.nextFilter) {
+    const left = Math.max(0, prog.nextFilter.threshold - (prog.soloSeconds || 0));
+    parts.push([fmtDur(left), ` more singing to `, prog.nextFilter.name]);
+  }
+  if (prog.nextParty) {
+    const left = Math.max(0, prog.nextParty.threshold - (prog.parties || 0));
+    parts.push([`${left}`, ` more hosted ${left === 1 ? "party" : "parties"} to `, prog.nextParty.name]);
+  }
+  parts.forEach(([count, middle, goal], i) => {
+    if (i > 0) meEls.next.appendChild(document.createElement("br"));
+    const b1 = document.createElement("b");
+    b1.textContent = count;
+    const b2 = document.createElement("b");
+    b2.textContent = goal;
+    meEls.next.append(b1, middle, b2);
+  });
+}
+
+// Fresh sign-in/out invalidates the cached stats; refetch only if the user is
+// looking at (or returns to) the Me tab.
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "ACCOUNT_CHANGED") {
+    meStatsLoaded = false;
+    if (activeView === "me") ensureMeStats(true);
+  }
+});
+
+// --- Playlists view (shared/playlists.js, chrome.storage.local) ────────────
+
+const plEls = {
+  currentSong: document.getElementById("pl-current-song"),
+  addBtn: document.getElementById("pl-add-btn"),
+  addTarget: document.getElementById("pl-add-target"),
+  addPick: document.getElementById("pl-add-pick"),
+  pickMenu: document.getElementById("pl-pick-menu"),
+  addStatus: document.getElementById("pl-add-status"),
+  newBtn: document.getElementById("pl-new-btn"),
+  newForm: document.getElementById("pl-new-form"),
+  newName: document.getElementById("pl-new-name"),
+  newCreate: document.getElementById("pl-new-create"),
+  lists: document.getElementById("pl-lists"),
+  empty: document.getElementById("pl-empty"),
+};
+// Which card is open; null = follow the active (default target) list.
+let plExpandedId = null;
+let plAddStatusTimer = null;
+
+// The URL a saved entry reopens. yt:/sp: keys rebuild a canonical URL (on
+// Spotify the tab URL is what's being BROWSED, not played); anything else
+// falls back to the tab URL captured at add time.
+function songUrlFor(videoKey, fallbackUrl) {
+  if (typeof videoKey === "string") {
+    if (videoKey.startsWith("yt:")) return `https://www.youtube.com/watch?v=${encodeURIComponent(videoKey.slice(3))}`;
+    if (videoKey.startsWith("sp:")) return `https://open.spotify.com/track/${encodeURIComponent(videoKey.slice(3))}`;
+  }
+  return fallbackUrl || null;
+}
+
+function currentSongForPlaylist() {
+  const videoKey = currentSongVideoKey();
+  if (!videoKey || !lastCleanedTitle) return null;
+  return {
+    videoKey,
+    title: lastCleanedTitle,
+    url: songUrlFor(videoKey, lastKnownUrl) || "",
+  };
+}
+
+async function updateCurrentSongCard() {
+  if (!plEls.currentSong) return;
+  const song = currentSongForPlaylist();
+  plEls.currentSong.textContent = song ? song.title : "Nothing playing";
+  plEls.currentSong.classList.toggle("pl-none", !song);
+  const state = await KarafiltPlaylists.loadCached();
+  const active = state.lists.find((l) => l.id === state.activeId) || null;
+  plEls.addTarget.textContent = active ? active.name : "playlist";
+  plEls.addBtn.disabled = !song;
+  plEls.addPick.disabled = !song || state.lists.length === 0;
+}
+
+function flashAddStatus(text) {
+  plEls.addStatus.textContent = text;
+  if (plAddStatusTimer) clearTimeout(plAddStatusTimer);
+  plAddStatusTimer = setTimeout(() => {
+    plAddStatusTimer = null;
+    plEls.addStatus.textContent = "";
+  }, 3000);
+}
+
+async function addCurrentSong(listId) {
+  const song = currentSongForPlaylist();
+  if (!song) return;
+  const state = await KarafiltPlaylists.load();
+  if (state.lists.length === 0) {
+    // Nothing to add to yet — open the create form instead of inventing one.
+    plEls.newForm.style.display = "";
+    plEls.newName.focus();
+    flashAddStatus("Create a playlist first.");
+    return;
+  }
+  const res = await KarafiltPlaylists.addSong(song, listId);
+  if (res.added) {
+    if (listId) await KarafiltPlaylists.setActive(listId); // picked → new default
+    flashAddStatus(`Added to ${res.list.name} ✓`);
+  } else if (res.reason === "duplicate") {
+    flashAddStatus(`Already in ${res.list.name}`);
+  } else if (res.reason === "full") {
+    flashAddStatus(`${res.list.name} is full`);
+  } else if (res.reason === "signed_out") {
+    flashAddStatus("Sign in on karafilt.com to save playlists.");
+  } else if (res.reason === "network" || res.reason === "port") {
+    flashAddStatus("Couldn't save — check your connection.");
+  }
+  renderPlaylists();
+  updateCurrentSongCard();
+}
+
+if (plEls.addBtn) plEls.addBtn.addEventListener("click", () => {
+  plEls.pickMenu.style.display = "none";
+  addCurrentSong(null);
+});
+
+if (plEls.addPick) plEls.addPick.addEventListener("click", async () => {
+  if (plEls.pickMenu.style.display !== "none") {
+    plEls.pickMenu.style.display = "none";
+    return;
+  }
+  const state = await KarafiltPlaylists.load();
+  plEls.pickMenu.textContent = "";
+  for (const list of state.lists) {
+    const item = document.createElement("button");
+    item.className = "pl-pick-item";
+    item.textContent = `${list.name} (${list.items.length})`;
+    item.addEventListener("click", () => {
+      plEls.pickMenu.style.display = "none";
+      addCurrentSong(list.id);
+    });
+    plEls.pickMenu.appendChild(item);
+  }
+  plEls.pickMenu.style.display = "";
+});
+
+if (plEls.newBtn) plEls.newBtn.addEventListener("click", () => {
+  const show = plEls.newForm.style.display === "none";
+  plEls.newForm.style.display = show ? "" : "none";
+  if (show) plEls.newName.focus();
+});
+
+async function createPlaylistFromForm() {
+  const name = plEls.newName.value.trim();
+  if (!name) return;
+  try {
+    const list = await KarafiltPlaylists.createList(name);
+    plExpandedId = list.id;
+  } catch (err) {
+    flashAddStatus(err && err.message ? err.message : "Couldn't save");
+  }
+  plEls.newName.value = "";
+  plEls.newForm.style.display = "none";
+  renderPlaylists();
+  updateCurrentSongCard();
+}
+
+if (plEls.newCreate) plEls.newCreate.addEventListener("click", createPlaylistFromForm);
+if (plEls.newName)
+  plEls.newName.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") createPlaylistFromForm();
+  });
+
+// Open a saved song on the panel's bound tab so the running capture and the
+// lyrics flow just follow along; a gone tab falls back to a fresh one.
+async function playPlaylistSong(item) {
+  const url = songUrlFor(item.videoKey, item.url);
+  if (!url || !/^https?:/i.test(url)) return;
+  let navigated = false;
+  if (activeTabId != null) {
+    try {
+      await chrome.tabs.update(activeTabId, { url, active: true });
+      navigated = true;
+    } catch {}
+  }
+  if (!navigated) {
+    const tab = await chrome.tabs.create({ url });
+    activeTabId = tab.id;
+  }
+  switchView("lyrics");
+}
+
+function renderPlaylistCard(list, state) {
+  const card = document.createElement("div");
+  card.className = "pl-card" + (list.id === state.activeId ? " pl-active-card" : "");
+
+  const head = document.createElement("button");
+  head.className = "pl-card-head";
+  const name = document.createElement("span");
+  name.className = "pl-card-name";
+  name.textContent = list.name;
+  const count = document.createElement("span");
+  count.className = "pl-card-count";
+  count.textContent = `${list.items.length} song${list.items.length === 1 ? "" : "s"}`;
+  head.append(name, count);
+  if (list.id === state.activeId) {
+    const star = document.createElement("span");
+    star.className = "pl-active-star";
+    star.textContent = "★ default";
+    star.title = "The + Add button adds to this playlist";
+    head.appendChild(star);
+  }
+  const expanded = (plExpandedId ?? state.activeId) === list.id;
+  head.addEventListener("click", () => {
+    plExpandedId = expanded ? "" : list.id; // "" = explicitly none
+    renderPlaylists();
+  });
+  card.appendChild(head);
+
+  if (expanded) {
+    const tools = document.createElement("div");
+    tools.className = "pl-card-tools";
+
+    if (list.id !== state.activeId) {
+      const def = document.createElement("button");
+      def.className = "pl-mini-btn";
+      def.textContent = "Make default";
+      def.title = "The + Add button adds to this playlist";
+      def.addEventListener("click", async () => {
+        await KarafiltPlaylists.setActive(list.id);
+        renderPlaylists();
+        updateCurrentSongCard();
+      });
+      tools.appendChild(def);
+    }
+
+    const ren = document.createElement("button");
+    ren.className = "pl-mini-btn";
+    ren.textContent = "Rename";
+    ren.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "text-input";
+      input.maxLength = KarafiltPlaylists.NAME_MAX;
+      input.value = list.name;
+      name.replaceWith(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const commit = async (save) => {
+        if (done) return;
+        done = true;
+        if (save && input.value.trim()) await KarafiltPlaylists.renameList(list.id, input.value);
+        renderPlaylists();
+        updateCurrentSongCard();
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") commit(true);
+        if (e.key === "Escape") commit(false);
+      });
+      input.addEventListener("blur", () => commit(true));
+    });
+    tools.appendChild(ren);
+
+    // Two-step delete: first click arms it, second click (until re-render)
+    // actually removes the list.
+    const del = document.createElement("button");
+    del.className = "pl-mini-btn";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      if (del.dataset.armed) {
+        await KarafiltPlaylists.deleteList(list.id);
+        if (plExpandedId === list.id) plExpandedId = null;
+        renderPlaylists();
+        updateCurrentSongCard();
+      } else {
+        del.dataset.armed = "1";
+        del.textContent = "Delete? Sure";
+      }
+    });
+    tools.appendChild(del);
+    card.appendChild(tools);
+
+    const body = document.createElement("div");
+    body.className = "pl-card-body";
+    if (list.items.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "pl-song-empty";
+      empty.textContent = "Empty — play a song and hit + Add.";
+      body.appendChild(empty);
+    }
+    for (const item of list.items) {
+      const row = document.createElement("div");
+      row.className = "pl-song";
+      const open = document.createElement("button");
+      open.className = "pl-song-open";
+      open.textContent = item.title || item.videoKey;
+      open.title = "Play this song";
+      open.addEventListener("click", () => playPlaylistSong(item));
+      const remove = document.createElement("button");
+      remove.className = "pl-song-remove";
+      remove.textContent = "✕";
+      remove.title = "Remove from playlist";
+      remove.addEventListener("click", async () => {
+        await KarafiltPlaylists.removeSong(list.id, item.videoKey);
+        renderPlaylists();
+      });
+      row.append(open, remove);
+      body.appendChild(row);
+    }
+    card.appendChild(body);
+  }
+  return card;
+}
+
+async function renderPlaylists() {
+  if (!plEls.lists) return;
+  const state = await KarafiltPlaylists.load();
+  plEls.empty.style.display = state.lists.length === 0 ? "" : "none";
+  plEls.empty.textContent = state.signedOut
+    ? "Sign in on karafilt.com to use playlists — they follow your account everywhere."
+    : "No playlists yet — create one and add the songs you love to sing.";
+  if (state.stale) flashAddStatus("Offline — showing your saved copy.");
+  plEls.lists.textContent = "";
+  for (const list of state.lists) {
+    plEls.lists.appendChild(renderPlaylistCard(list, state));
+  }
+}
+
+
 // --- Init ---
 bindToPinnedTab();
 refreshAccountStatus();
+updateCurrentSongCard();

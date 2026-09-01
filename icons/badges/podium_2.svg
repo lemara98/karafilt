@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#aeb6c8"/>
+      <stop offset="100%" stop-color="#e2e8f4"/>
+    </linearGradient>
+    <radialGradient id="disc" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#1a1f36"/>
+      <stop offset="100%" stop-color="#0b0e1a"/>
+    </radialGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+  </defs>
+<circle cx="120" cy="120" r="110" fill="none" stroke="#e2e8f4" stroke-width="10" opacity="0.35" filter="url(#glow)"/>
+<circle cx="120" cy="120" r="116" fill="none" stroke="#e2e8f4" stroke-width="2" opacity="0.45"/>
+<circle cx="120" cy="120" r="100" fill="url(#disc)"/>
+<circle cx="120" cy="120" r="110" fill="none" stroke="url(#g)" stroke-width="6"/>
+<g stroke="#e2e8f4" stroke-width="4" stroke-linecap="round" opacity="0.9"><line x1="224.0" y1="120.0" x2="236.0" y2="120.0"/><line x1="193.5" y1="193.5" x2="202.0" y2="202.0"/><line x1="120.0" y1="224.0" x2="120.0" y2="236.0"/><line x1="46.5" y1="193.5" x2="38.0" y2="202.0"/><line x1="16.0" y1="120.0" x2="4.0" y2="120.0"/><line x1="46.5" y1="46.5" x2="38.0" y2="38.0"/><line x1="120.0" y1="16.0" x2="120.0" y2="4.0"/><line x1="193.5" y1="46.5" x2="202.0" y2="38.0"/></g>
+<g transform="translate(72 64) scale(1.1)"><rect x="6" y="6" width="10" height="68" rx="2" fill="url(#g)"/><rect x="22" y="32" width="10" height="16" rx="2" fill="url(#g)"/><rect x="34" y="24" width="10" height="32" rx="2" fill="url(#g)"/><rect x="46" y="14" width="10" height="22" rx="2" fill="url(#g)"/><rect x="46" y="44" width="10" height="22" rx="2" fill="url(#g)"/><rect x="58" y="6" width="10" height="20" rx="2" fill="url(#g)"/><rect x="58" y="54" width="10" height="20" rx="2" fill="url(#g)"/></g>
+<circle cx="167" cy="167" r="38" fill="#e2e8f4" stroke="#0b0e1a" stroke-width="6"/>
+<g transform="translate(143 143) scale(0.48)">
+    <polygon points="30,2 50,34 10,34" fill="#0b0e1a" opacity="0.8"/>
+    <polygon points="70,2 90,34 50,34" fill="#0b0e1a" opacity="0.8"/>
+    <circle cx="50" cy="62" r="32" fill="#0b0e1a"/>
+    <circle cx="50" cy="62" r="24" fill="none" stroke="#e2e8f4" stroke-width="3"/>
+    <circle cx="39" cy="62" r="7.5" fill="#e2e8f4"/><circle cx="61" cy="62" r="7.5" fill="#e2e8f4"/></g></svg>

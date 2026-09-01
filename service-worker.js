@@ -1156,6 +1156,73 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true; // async response
 
+    case "GET_MY_STATS":
+      // The side panel's Me tab: usage totals, scoreboard ranks and
+      // achievements in one payload (/api/me/stats). Same cookie-carrying
+      // read as GET_ACCOUNT_STATUS; 401 means signed out and the panel shows
+      // its sign-in prompt.
+      (async () => {
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false, disabled: true });
+          return;
+        }
+        try {
+          const res = await fetchWithTimeout(
+            `${base}/api/me/stats`,
+            { credentials: "include", headers: { Accept: "application/json" } },
+            10000,
+          );
+          if (res.ok) {
+            sendResponse({ ok: true, stats: await res.json() });
+          } else {
+            sendResponse({ ok: false, status: res.status, loginUrl: `${base}/login` });
+          }
+        } catch {
+          sendResponse({ ok: false, error: "network" });
+        }
+      })();
+      return true; // async response
+
+    case "PLAYLISTS_GET":
+    case "PLAYLISTS_MUTATE":
+      // Account-synced playlists (side panel Playlists tab). Same
+      // cookie-carrying fetch as GET_ACCOUNT_STATUS against /api/playlists;
+      // the 0041 RPCs behind it own the ownership checks and caps.
+      (async () => {
+        const { websiteUrl } = await chrome.storage.local.get({
+          websiteUrl: "https://karafilt.com",
+        });
+        const base = (websiteUrl || "").trim().replace(/\/+$/, "");
+        if (!base) {
+          sendResponse({ ok: false, disabled: true });
+          return;
+        }
+        try {
+          const init =
+            message.type === "PLAYLISTS_MUTATE"
+              ? {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json", Accept: "application/json" },
+                  body: JSON.stringify(message.body || {}),
+                }
+              : { credentials: "include", headers: { Accept: "application/json" } };
+          const res = await fetchWithTimeout(`${base}/api/playlists`, init, 10000);
+          if (res.ok) {
+            sendResponse({ ok: true, data: await res.json() });
+          } else {
+            sendResponse({ ok: false, status: res.status });
+          }
+        } catch {
+          sendResponse({ ok: false, error: "network" });
+        }
+      })();
+      return true; // async response
+
     case "SUBMIT_FILTER_RATING":
       // Forward a per-song filter rating to the website. Same cookie-carrying
       // fetch as the account probe (the user's site session authenticates it).
