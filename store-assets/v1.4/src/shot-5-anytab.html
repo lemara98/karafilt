@@ -1,0 +1,46 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="shot.css"><style>
+.any-wrap { flex:1; padding:38px 48px; display:flex; flex-direction:column; gap:26px; }
+.sites { display:flex; gap:22px; }
+.scard { flex:1; border-radius:16px; padding:22px; background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.07); position:relative; min-height:190px; }
+.scard h3 { font-size:18px; margin:12px 0 6px; }
+.scard p { font-size:13px; color:#9ba1c0; line-height:1.5; }
+.chip { display:inline-flex; align-items:center; gap:7px; font-family:"JetBrains Mono",monospace; font-size:10.5px; letter-spacing:1.5px; padding:5px 11px; border-radius:999px; background:rgba(139,124,255,.12); border:1px solid rgba(167,139,250,.35); color:#c9b8ff; }
+.mini { height:64px; border-radius:10px; margin-top:16px; position:relative; overflow:hidden; background:#0d0f1a; border:1px solid rgba(255,255,255,.06); }
+.mini .bar { position:absolute; bottom:10px; left:12px; right:12px; height:4px; border-radius:2px; background:rgba(255,255,255,.12); }
+.mini .bar i { display:block; height:100%; width:62%; border-radius:2px; background:linear-gradient(90deg,#8b7cff,#c084fc); }
+.mini .disc { position:absolute; top:10px; left:12px; width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg,#6d5bd0,#b46cff); }
+.mini .lines i { display:block; height:5px; border-radius:3px; background:rgba(255,255,255,.14); margin:6px 12px 0 54px; }
+.mini .lines i:nth-child(2){ width:60%; } .mini .lines i:nth-child(3){ width:45%; }
+.claims { display:flex; gap:22px; }
+.claim { flex:1; display:flex; gap:14px; align-items:flex-start; padding:18px 20px; border-radius:14px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); }
+.claim .ico { width:40px; height:40px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#8b7cff33,#c084fc33); border:1px solid rgba(167,139,250,.35); font-size:19px; }
+.claim b { display:block; font-size:15.5px; margin-bottom:3px; }
+.claim p { font-size:12.5px; color:#9ba1c0; line-height:1.45; }
+</style></head><body>
+<div class="glow g1"></div><div class="glow g2"></div>
+<div class="top">
+  <div><div class="eyebrow">KARAFILT — CHROME EXTENSION</div><h1>Works on <span class="accent">any tab.</span></h1></div>
+  <div class="brand"><img src="wordmark.svg" alt=""><span class="meta">free · open source</span></div>
+</div>
+<div class="browser">
+  <div class="chrome-bar"><div class="dots"><span></span><span></span><span></span></div>
+    <div class="urlbar"><span class="lock">●</span>anywhere your music plays</div><div class="kf-dot"></div></div>
+  <div class="content">
+    <div class="any-wrap">
+      <div class="sites">
+        <div class="scard"><span class="chip">VIDEO SITES</span><h3>Music videos &amp; live sets</h3><p>Filter the vocals out of any video that's playing and sing over the original band.</p>
+          <div class="mini"><div class="disc"></div><div class="lines"><i></i><i></i><i></i></div><div class="bar"><i></i></div></div></div>
+        <div class="scard"><span class="chip">STREAMING</span><h3>Your streaming library</h3><p>Works with web players too — the panel follows the track that's actually playing.</p>
+          <div class="mini"><div class="disc" style="border-radius:50%"></div><div class="lines"><i></i><i></i><i></i></div><div class="bar"><i style="width:34%"></i></div></div></div>
+        <div class="scard"><span class="chip">ANY AUDIO</span><h3>Anything with sound</h3><p>If a tab plays audio, Karafilt can capture it, drop the vocals, and find the lyrics.</p>
+          <div class="mini"><div class="disc" style="border-radius:4px"></div><div class="lines"><i></i><i></i><i></i></div><div class="bar"><i style="width:80%"></i></div></div></div>
+      </div>
+      <div class="claims">
+        <div class="claim"><div class="ico">⚡</div><div><b>Real-time, on your device</b><p>WebAssembly audio processing in the browser — nothing is uploaded anywhere.</p></div></div>
+        <div class="claim"><div class="ico">🎚️</div><div><b>Three filter modes</b><p>Spectral, Spectral Deep and Basic — dial vocal removal from 0 to 100%.</p></div></div>
+        <div class="claim"><div class="ico">🆓</div><div><b>Free &amp; open source</b><p>No paywall, no ads. The code is on GitHub for anyone to read.</p></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>

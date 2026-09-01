@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@700&display=swap');
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:440px; height:280px; overflow:hidden; }
+body { font-family:"Space Grotesk",sans-serif; background:#070912; color:#f1efff; position:relative;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; }
+.glow { position:absolute; width:520px; height:520px; border-radius:50%; top:-200px; left:-60px;
+  background:radial-gradient(circle, rgba(139,124,255,.22) 0%, transparent 65%); }
+.glow2 { position:absolute; width:420px; height:420px; border-radius:50%; bottom:-260px; right:-100px;
+  background:radial-gradient(circle, rgba(180,108,255,.16) 0%, transparent 65%); }
+img { height:44px; position:relative; }
+.tag { font-size:16.5px; color:#c9cde0; position:relative; }
+.eq { display:flex; gap:6px; align-items:flex-end; height:26px; position:relative; }
+.eq span { width:8px; border-radius:4px; background:linear-gradient(180deg,#c084fc,#8b7cff); }
+.chips { display:flex; gap:8px; position:relative; }
+.chip { font-family:"JetBrains Mono",monospace; font-size:9.5px; letter-spacing:1.5px; padding:4px 10px;
+  border-radius:999px; background:rgba(139,124,255,.12); border:1px solid rgba(167,139,250,.35); color:#c9b8ff; }
+</style></head><body>
+<div class="glow"></div><div class="glow2"></div>
+<div class="eq"><span style="height:10px"></span><span style="height:22px"></span><span style="height:14px"></span><span style="height:26px"></span><span style="height:17px"></span></div>
+<img src="wordmark.svg">
+<div class="tag">Turn any tab into a karaoke machine.</div>
+<div class="chips"><span class="chip">VOCAL REMOVAL</span><span class="chip">SYNCED LYRICS</span><span class="chip">FREE</span></div>
+</body></html>

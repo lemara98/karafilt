@@ -5,6 +5,22 @@ All notable changes to Karafilt are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-01
+
+### Added
+- **Three tabs in the side panel: Lyrics / Playlists / Me.** Lyrics stays the
+  default and the panel snaps back to it whenever a new song starts, so the
+  new screens never cover the words mid-song.
+- **Me — your singing at a glance.** Total time sung, unique songs and
+  sessions, your scoreboard position for this month and all time, and the
+  full achievement wall: earned badges in color, locked ones as silhouettes,
+  with how far you are from the next tier.
+- **Playlists that follow your account.** Create named playlists and add the
+  song you're singing with one tap (or pick which list from the ▾ menu).
+  Playlists sync to your Karafilt account — a reinstall or another computer
+  keeps them — and entries reopen right on the tab the filter is running on.
+  Offline, the panel shows your saved copy.
+
 ## [1.3.1] - 2026-08-10
 
 ### Fixed
