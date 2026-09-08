@@ -732,10 +732,77 @@ try {
   });
 } catch (e) { /* keep default */ }
 
-async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
+// Every Karalyr request says who it is. The server logs this so extension
+// traffic can be told apart from unknown clients when a traffic alert fires
+// (one user skipping through a playlist looks a lot like a scraper otherwise).
+const KARALYR_CLIENT_HEADERS = (() => {
+  try {
+    return { "X-Karalyr-Client": `karafilt/${chrome.runtime.getManifest().version}` };
+  } catch {
+    return { "X-Karalyr-Client": "karafilt" };
+  }
+})();
+
+// Karalyr negative cache. lyricsCache deliberately skips phase-1 misses (a
+// cached miss would short-circuit phase 2), which meant every candidate of
+// every revisit re-ran the whole Karalyr chain - 3 candidates x up to 4
+// requests, for a track the server said it did not have seconds ago. Misses
+// are remembered here per (video, candidate) for a while; a hit is already
+// cached by lyricsCache. The manual Refresh button (forceRefresh) bypasses it.
+const KARALYR_MISS_TTL_MS = 10 * 60 * 1000;
+const KARALYR_MISS_MAX = 300;
+const karalyrMisses = new Map(); // cacheKey -> expiresAt
+
+function karalyrMissed(key) {
+  const until = karalyrMisses.get(key);
+  if (until === undefined) return false;
+  if (until <= Date.now()) { karalyrMisses.delete(key); return false; }
+  return true;
+}
+
+function rememberKaralyrMiss(key) {
+  if (karalyrMisses.size >= KARALYR_MISS_MAX) {
+    karalyrMisses.delete(karalyrMisses.keys().next().value);
+  }
+  karalyrMisses.set(key, Date.now() + KARALYR_MISS_TTL_MS);
+}
+
+// The by-video-id lookup does not depend on the candidate at all, yet phase 1
+// fired it once per candidate, in parallel - three identical requests per
+// video. One in-flight promise per video key, kept for the miss TTL, so the
+// three candidates share a single round trip.
+const karalyrByVideo = new Map(); // videoKey -> { promise, expiresAt }
+
+function karalyrVideoLookup(videoKey, fetcher) {
+  const now = Date.now();
+  const entry = karalyrByVideo.get(videoKey);
+  if (entry && entry.expiresAt > now) return entry.promise;
+  if (karalyrByVideo.size >= KARALYR_MISS_MAX) {
+    karalyrByVideo.delete(karalyrByVideo.keys().next().value);
+  }
+  const fresh = { promise: null, expiresAt: now + KARALYR_MISS_TTL_MS };
+  fresh.promise = fetcher().catch(() => {
+    // A timeout or network error is not a miss - do not pin it for the TTL.
+    if (karalyrByVideo.get(videoKey) === fresh) karalyrByVideo.delete(videoKey);
+    return null;
+  });
+  karalyrByVideo.set(videoKey, fresh);
+  return fresh.promise;
+}
+
+function forgetKaralyr(artist, track, videoKey) {
+  karalyrMisses.delete(cacheKey(artist, track, videoKey));
+  if (videoKey) karalyrByVideo.delete(videoKey);
+}
+
+async function fetchFromKaralyr(artist, track, album, durationSec, videoKey, forceRefresh) {
   // The by-video-id lookup needs no parsed name at all — only skip entirely
   // when there's neither a video key nor a usable {artist, track} pair.
   if (!karalyrBase || (!videoKey && (!artist || !track))) return { found: false };
+
+  const missKey = cacheKey(artist, track, videoKey);
+  if (forceRefresh) forgetKaralyr(artist, track, videoKey);
+  else if (karalyrMissed(missKey)) return { found: false };
 
   const fetchJson = async (path, params) => {
     const u = new URL(path, karalyrBase);
@@ -743,7 +810,7 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 1500);
     try {
-      const res = await fetch(u.toString(), { signal: ctrl.signal });
+      const res = await fetch(u.toString(), { signal: ctrl.signal, headers: KARALYR_CLIENT_HEADERS });
       if (!res.ok) return null;
       return await res.json();
     } finally {
@@ -789,10 +856,10 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
     let row = null;
     let matchedBy = "name";
     if (videoKey && videoKey.startsWith("yt:")) {
-      row = await fetchJson("/api/get", { youtube_id: videoKey.slice(3) });
+      row = await karalyrVideoLookup(videoKey, () => fetchJson("/api/get", { youtube_id: videoKey.slice(3) }));
       if (row) matchedBy = "video-id";
     } else if (videoKey && videoKey.startsWith("sp:")) {
-      row = await fetchJson("/api/get", { video_key: videoKey });
+      row = await karalyrVideoLookup(videoKey, () => fetchJson("/api/get", { video_key: videoKey }));
       if (row) matchedBy = "video-id";
     }
     if (!row && artist && track) {
@@ -800,7 +867,10 @@ async function fetchFromKaralyr(artist, track, album, durationSec, videoKey) {
       if (!row && durationSec > 0) row = await tryGet(artist, track, album, 0);
       if (!row) row = await trySearch();
     }
-    if (!row || (!row.syncedLyrics && !row.plainLyrics)) return { found: false };
+    if (!row || (!row.syncedLyrics && !row.plainLyrics)) {
+      rememberKaralyrMiss(missKey);
+      return { found: false };
+    }
     dbg(`[SW] Karalyr hit (${matchedBy}): ${row.artistName} — ${row.trackName} (tier ${row.karalyr && row.karalyr.tier})`);
     return {
       found: true,
@@ -855,7 +925,7 @@ async function fetchFromLRCLib(artist, track, opts) {
   // Karalyr first (community + word-timed lyrics). skipLrclib means phase 2
   // of the content-script loop — Karalyr was already tried in phase 1.
   if (!skipLrclib) {
-    result = await fetchFromKaralyr(artist, track, album, durationSec, videoKey);
+    result = await fetchFromKaralyr(artist, track, album, durationSec, videoKey, forceRefresh);
   }
 
   let lrclibMs = 0;
@@ -1340,7 +1410,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             new URL("/api/signal", karalyrBase).toString(),
             {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...KARALYR_CLIENT_HEADERS },
               body: JSON.stringify({ revision_id: revisionId, type: signal }),
             },
             8000,
